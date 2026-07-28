@@ -1,0 +1,64 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: tradingmaster
+      MYSQL_USER: trading
+      MYSQL_PASSWORD: trading
+      MYSQL_ROOT_PASSWORD: rootpassword
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ptrading"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: worker
+    command: sh -c "npx prisma db push && npx tsx prisma/seed.ts"
+    environment:
+      DATABASE_URL: mysql://trading:trading@mysql:3306/tradingmaster
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: mysql://trading:trading@mysql:3306/tradingmaster
+      AUTH_SECRET: ${AUTH_SECRET:-please-change-me-in-production}
+      SIGNAL_MIN_CONFIDENCE: "65"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql://trading:trading@mysql:3306/tradingmaster
+      WORKER_INTERVAL_SEC: "60"
+      SIGNAL_MIN_CONFIDENCE: "65"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  mysql-data:

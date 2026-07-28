@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum SignalSide {
+  BUY
+  SELL
+}
+
+enum SignalStatus {
+  ACTIVE
+  TP1_HIT
+  TP2_HIT
+  TP3_HIT
+  STOPPED
+  EXPIRED
+  CANCELLED
+}
+
+model User {
+  id          String        @id @default(cuid())
+  email       String        @unique
+  password    String
+  name        String?
+  role        Role          @default(VIEWER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  preferences UserPreference[]
+  alerts      AlertChannel[]
+  auditLogs   AuditLog[]
+}
+
+model UserPreference {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model Signal {
+  id               String       @id @default(cuid())
+  symbol           String
+  timeframe        String
+  side             SignalSide
+  entry            Float
+  stopLoss         Float
+  tp1              Float
+  tp2              Float
+  tp3              Float
+  riskReward       Float
+  confidence       Float
+  confidenceLabel  String
+  expectedMovePct  Float
+  estHoldingMin    Int
+  reasoning        Json
+  invalidation     Json
+  strategyScores   Json
+  marketSnapshot   Json
+  status           SignalStatus @default(ACTIVE)
+  resultPnlPct     Float?
+  closedPrice      Float?
+  closedAt         DateTime?
+  createdAt        DateTime     @default(now())
+  learning         LearningRecord[]
+
+  @@index([symbol, timeframe])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model StrategyConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String   @db.Text
+  enabled     Boolean  @default(true)
+  weight      Float    @default(1.0)
+  totalTrades Int      @default(0)
+  wins        Int      @default(0)
+  losses      Int      @default(0)
+  sumRR       Float    @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
+model Backtest {
+  id          String   @id @default(cuid())
+  symbol      String
+  timeframe   String
+  strategyKey String
+  params      Json
+  metrics     Json
+  trades      Json
+  createdAt   DateTime @default(now())
+
+  @@index([symbol, timeframe])
+  @@index([strategyKey])
+}
+
+model MarketSnapshot {
+  id        String   @id @default(cuid())
+  symbol    String
+  timeframe String
+  price     Float
+  data      Json
+  createdAt DateTime @default(now())
+
+  @@index([symbol, timeframe, createdAt])
+}
+
+model LearningRecord {
+  id           String   @id @default(cuid())
+  signalId     String
+  features     Json
+  outcome      String
+  pnlPct       Float
+  analysis     Json
+  adjustments  Json
+  createdAt    DateTime @default(now())
+  signal       Signal   @relation(fields: [signalId], references: [id])
+
+  @@index([signalId])
+  @@index([createdAt])
+}
+
+model AlertChannel {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  config    Json
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  meta      Json
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+}
