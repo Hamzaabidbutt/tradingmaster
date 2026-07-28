@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #05070d;
+  color: #e5e9f0;
+  font-feature-settings: "tnum";
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(34, 211, 238, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(167, 139, 250, 0.06), transparent 60%),
+    #05070d;
+}
+
+/* Glassmorphism card */
+.glass {
+  background: linear-gradient(160deg, rgba(17, 22, 41, 0.72), rgba(9, 12, 21, 0.86));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 1rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.glass-hover {
+  transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+}
+.glass-hover:hover {
+  border-color: rgba(34, 211, 238, 0.25);
+  box-shadow: 0 8px 40px rgba(34, 211, 238, 0.08);
+}
+
+/* Neon text accents */
+.text-glow-bull { text-shadow: 0 0 12px rgba(0, 229, 160, 0.55); }
+.text-glow-bear { text-shadow: 0 0 12px rgba(255, 77, 109, 0.55); }
+.text-glow-cyan { text-shadow: 0 0 12px rgba(34, 211, 238, 0.55); }
+
+/* Thin scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(34, 211, 238, 0.35); }
+
+/* Range sliders (strategy weights) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #22d3ee, #a78bfa);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e5e9f0;
+  border: 2px solid #22d3ee;
+  cursor: pointer;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.6);
+}
+
+/* Live pulse dot */
+.pulse-dot {
+  position: relative;
+}
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  background: inherit;
+  opacity: 0.6;
+}
+@keyframes ping {
+  75%, 100% { transform: scale(2.4); opacity: 0; }
+}

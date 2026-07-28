@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          # prisma generate (postinstall) does not need a live database
+          DATABASE_URL: "mysql://ci:ci@localhost:3306/ci"
+
+      - name: Unit & integration tests
+        run: npm test
+
+      - name: Type-check & build
+        run: npm run build
+        env:
+          DATABASE_URL: "mysql://ci:ci@localhost:3306/ci"
+          AUTH_SECRET: "ci-only-secret"
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test-and-build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build web image
+        run: docker build --target runner -t tradingmaster-web .
+      - name: Build worker image
+        run: docker build --target worker -t tradingmaster-worker .
