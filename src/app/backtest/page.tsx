@@ -6,26 +6,6 @@ import { GlassCard, StatChip } from "@/components/ui/primitives";
 import { MARKETS, TIMEFRAMES } from "@/lib/config";
 import { BacktestMetrics } from "@/engines/types";
 
-const STRATEGY_OPTIONS = [
-  ["all", "Composite (all strategies)"],
-  ["smc", "Smart Money Concepts"],
-  ["ict", "ICT Model"],
-  ["liquidity_sweep", "Liquidity Sweep"],
-  ["order_block", "Order Block"],
-  ["fvg", "Fair Value Gap"],
-  ["breakout", "Breakout"],
-  ["volume_expansion", "Volume Expansion"],
-  ["trend_continuation", "Trend Continuation"],
-  ["reversal", "Reversal"],
-  ["choch", "CHOCH"],
-  ["bos", "BOS Momentum"],
-  ["engulfing", "Engulfing"],
-  ["support_resistance", "Support/Resistance"],
-  ["delta", "Delta / Order Flow"],
-  ["absorption", "Absorption"],
-  ["liquidation_fade", "Liquidation Fade"],
-] as const;
-
 interface SavedBacktest {
   id: string;
   symbol: string;
@@ -45,6 +25,10 @@ export default function BacktestPage() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SavedBacktest[]>([]);
   const [compare, setCompare] = useState<BacktestMetrics[]>([]);
+  // Pulled from the strategy registry so new strategies appear automatically.
+  const [strategyOptions, setStrategyOptions] = useState<[string, string][]>([
+    ["all", "Composite (all strategies)"],
+  ]);
 
   const loadHistory = () =>
     fetch("/api/backtest")
@@ -54,6 +38,15 @@ export default function BacktestPage() {
 
   useEffect(() => {
     loadHistory();
+    fetch("/api/strategies")
+      .then((r) => r.json())
+      .then((d) => {
+        const rows: [string, string][] = (d.strategies ?? []).map(
+          (s: { key: string; name: string }) => [s.key, s.name] as [string, string]
+        );
+        setStrategyOptions([["all", "Composite (all strategies)"], ...rows]);
+      })
+      .catch(() => undefined);
   }, []);
 
   const run = async () => {
@@ -98,7 +91,7 @@ export default function BacktestPage() {
             <label className="text-xs">
               <span className="mb-1 block text-slate-500">Strategy</span>
               <select value={strategyKey} onChange={(e) => setStrategyKey(e.target.value)} className="rounded-lg border border-white/10 bg-base-800 px-2.5 py-1.5 outline-none">
-                {STRATEGY_OPTIONS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                {strategyOptions.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
               </select>
             </label>
             <label className="text-xs">

@@ -37,6 +37,18 @@ export const TIMEFRAME_MINUTES: Record<Timeframe, number> = {
   "1d": 1440, "1w": 10080, "1M": 43200,
 };
 
+/**
+ * Lower timeframe used to reconstruct a genuine footprint (bid × ask per
+ * price level) for each candle of the selected timeframe. Roughly 1/10th
+ * of the parent bar keeps the request cheap while giving the footprint
+ * engine real intrabar structure to work with.
+ */
+export const FOOTPRINT_SOURCE: Record<Timeframe, Timeframe | null> = {
+  "1m": null, "3m": "1m", "5m": "1m", "15m": "1m", "30m": "3m",
+  "1h": "5m", "2h": "5m", "4h": "15m", "6h": "15m", "8h": "30m", "12h": "30m",
+  "1d": "1h", "1w": "4h", "1M": "1d",
+};
+
 export function isValidSymbol(symbol: string): boolean {
   return MARKETS.some((m) => m.symbol === symbol);
 }

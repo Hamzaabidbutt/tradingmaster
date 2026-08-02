@@ -1,12 +1,17 @@
 import { ENGINE_DEFAULTS, Timeframe } from "@/lib/config";
 import { detectCandlePatterns } from "./candlestick";
+import { analyzeDelta } from "./deltaAnalysis";
 import { detectDoublePatterns } from "./doublePatterns";
+import { buildFootprint } from "./footprint";
 import { detectFVGs } from "./fvg";
+import { computeFibonacci, computeMovingAverages, computeVwap, detectEqualLevels } from "./indicators";
 import { generateInsights } from "./insights";
+import { analyzeLiquidationDelta } from "./liquidationDelta";
 import { analyzeLiquidations } from "./liquidations";
 import { analyzeLiquidity } from "./liquidity";
 import { analyzeMarketStructure } from "./marketStructure";
 import { detectOrderBlocks, detectSupplyDemand } from "./orderBlocks";
+import { detectOrderFlowEvents } from "./orderFlowEvents";
 import { analyzeOrderFlow } from "./orderflow";
 import { analyzePremiumDiscount } from "./premiumDiscount";
 import { buildTradeSetup, computeConfidence } from "./signal";
@@ -14,10 +19,19 @@ import { evaluateStrategies } from "./strategies";
 import { detectSupportResistance } from "./supportResistance";
 import { Candle, FullAnalysis } from "./types";
 import { analyzeVolume } from "./volume";
+import { buildVolumeProfile } from "./volumeProfile";
 
 export interface AnalyzeOptions {
   weights?: Record<string, { weight: number; enabled: boolean }>;
   minConfidence?: number;
+  /**
+   * Lower-timeframe candles covering the same span, used to reconstruct a
+   * genuine footprint (bid × ask per price level). Optional — without it
+   * the footprint engine falls back to a modelled distribution and marks
+   * itself as estimated.
+   */
+  subCandles?: Candle[] | null;
+  subTimeframe?: string;
 }
 
 /**
@@ -36,6 +50,7 @@ export function analyzeMarket(
   }
   const price = candles[candles.length - 1].close;
 
+  // --- Structure & smart-money zones ---
   const structure = analyzeMarketStructure(candles, {
     majorLookback: ENGINE_DEFAULTS.majorSwingLookback,
     minorLookback: ENGINE_DEFAULTS.minorSwingLookback,
@@ -46,12 +61,36 @@ export function analyzeMarket(
   const supplyDemand = [...detectSupplyDemand(candles), ...breakers];
   const premiumDiscount = analyzePremiumDiscount(candles, structure.swings);
   const liquidity = analyzeLiquidity(candles, structure.swings, ENGINE_DEFAULTS.equalLevelTolerance);
+  const equalLevels = detectEqualLevels(candles, structure.swings);
+
+  // --- Price action ---
   const patterns = detectCandlePatterns(candles);
   const srLevels = detectSupportResistance(candles, timeframe);
+  const doublePatterns = detectDoublePatterns(candles, structure.swings);
+
+  // --- Volume & order flow ---
   const volume = analyzeVolume(candles);
   const orderFlow = analyzeOrderFlow(candles);
+  const volumeProfile = buildVolumeProfile(candles.slice(-Math.min(240, candles.length)), {
+    bins: 60,
+    scope: "visible",
+  });
+  const footprint = buildFootprint(candles, opts.subCandles ?? null, {
+    imbalanceThreshold: 3,
+    count: 30,
+    sourceTimeframe: opts.subTimeframe,
+  });
+  const delta = analyzeDelta(candles);
+  const orderFlowEvents = detectOrderFlowEvents(candles, footprint, volumeProfile, srLevels);
+
+  // --- Liquidations ---
   const liquidations = analyzeLiquidations(candles);
-  const doublePatterns = detectDoublePatterns(candles, structure.swings);
+  const liquidationDelta = analyzeLiquidationDelta(candles);
+
+  // --- Classic indicators ---
+  const movingAverages = computeMovingAverages(candles);
+  const vwap = computeVwap(candles);
+  const fibonacci = computeFibonacci(candles, structure.swings);
 
   const core = {
     symbol,
@@ -70,6 +109,15 @@ export function analyzeMarket(
     orderFlow,
     liquidations,
     doublePatterns,
+    volumeProfile,
+    footprint,
+    orderFlowEvents,
+    delta,
+    movingAverages,
+    vwap,
+    fibonacci,
+    equalLevels,
+    liquidationDelta,
   };
 
   const strategyScores = evaluateStrategies(core, opts.weights);

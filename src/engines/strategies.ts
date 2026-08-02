@@ -297,6 +297,303 @@ export const STRATEGIES: StrategyDef[] = [
       };
     },
   },
+
+  /* ---------------- Order-flow strategies ---------------- */
+
+  {
+    key: "key_level_absorption",
+    name: "Key-Level Absorption",
+    description:
+      "Position with the passive side absorbing aggression — but only when it happens at a key level (POC, value edge, LVN or strong S/R), never mid-range.",
+    defaultWeight: 1.2,
+    evaluate: (a: A) => {
+      const recent = a.orderFlowEvents.absorptions.slice(-2);
+      if (recent.length === 0) return { score: 0, reasons: [] };
+      let score = 0;
+      const reasons: string[] = [];
+      for (const abs of recent) {
+        // Absorption without a level is deliberately down-weighted — the
+        // whole point is that mid-range absorption is noise.
+        const levelMultiplier = abs.atKeyLevel ? 1 : 0.35;
+        const contribution = (abs.strength * 0.55) * levelMultiplier;
+        score += abs.side === "buy" ? contribution : -contribution;
+        reasons.push(abs.explanation);
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "exhaustion_reversal",
+    name: "Exhaustion Reversal",
+    description:
+      "Fade moves whose participation is draining away — especially a new extreme printed on shrinking volume.",
+    defaultWeight: 1.0,
+    evaluate: (a: A) => {
+      const exh = a.orderFlowEvents.exhaustions[a.orderFlowEvents.exhaustions.length - 1];
+      if (!exh) return { score: 0, reasons: [] };
+      const stageWeight = exh.stage === "danger" ? 1 : exh.stage === "weakening" ? 0.6 : 0.3;
+      const magnitude = exh.strength * 0.5 * stageWeight;
+      // Exhausted buyers is a bearish input and vice versa.
+      const score = exh.side === "buy" ? -magnitude : magnitude;
+      const reasons = [exh.explanation];
+      // Exhaustion + absorption at a level is the premium configuration.
+      const abs = a.orderFlowEvents.absorptions[a.orderFlowEvents.absorptions.length - 1];
+      if (abs?.atKeyLevel && ((exh.side === "buy" && abs.side === "sell") || (exh.side === "sell" && abs.side === "buy"))) {
+        reasons.push("Exhaustion is confirmed by absorption on the opposite side at a key level — the strongest reversal configuration in this framework.");
+        return { score: clamp(score * 1.4), reasons };
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "trapped_traders",
+    name: "Trapped Traders",
+    description:
+      "Trade against traders caught offside at an extreme — their stops become the next liquidity target.",
+    defaultWeight: 1.1,
+    evaluate: (a: A) => {
+      const traps = a.orderFlowEvents.trapped.slice(-2);
+      if (traps.length === 0) return { score: 0, reasons: [] };
+      let score = 0;
+      const reasons: string[] = [];
+      for (const t of traps) {
+        // Trapped buyers → price should fall to their stops, and vice versa.
+        score += t.side === "buyers" ? -t.strength * 0.6 : t.strength * 0.6;
+        reasons.push(t.explanation);
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "cvd_divergence",
+    name: "CVD Divergence",
+    description:
+      "Cumulative delta disagreeing with price — an earlier reversal warning than any price-derived oscillator.",
+    defaultWeight: 1.1,
+    evaluate: (a: A) => {
+      const div = a.delta.divergences[a.delta.divergences.length - 1];
+      if (!div) return { score: 0, reasons: [] };
+      const magnitude = div.strength * 0.6;
+      let score = 0;
+      if (div.kind === "regular_bearish" || div.kind === "hidden_bearish") score = -magnitude;
+      if (div.kind === "regular_bullish" || div.kind === "hidden_bullish") score = magnitude;
+      return { score: clamp(score), reasons: [div.explanation] };
+    },
+  },
+  {
+    key: "stacked_imbalance",
+    name: "Stacked Imbalance",
+    description:
+      "Follow genuinely one-sided auctions: 3+ consecutive footprint imbalances where one side got no opportunity to fill.",
+    defaultWeight: 0.9,
+    evaluate: (a: A) => {
+      const recent = a.footprint.candles.slice(-3);
+      let score = 0;
+      const reasons: string[] = [];
+      for (const fc of recent) {
+        for (const si of fc.stackedImbalances) {
+          const magnitude = Math.min(45, 18 + si.count * 6);
+          score += si.direction === "buy" ? magnitude : -magnitude;
+          reasons.push(
+            `Stacked ${si.direction} imbalance across ${si.count} price levels (${si.fromPrice.toFixed(4)}–${si.toPrice.toFixed(4)}) — aggressive ${si.direction === "buy" ? "buyers" : "sellers"} gave the other side no chance to fill.`
+          );
+        }
+      }
+      // Modelled footprints deserve less trust than reconstructed ones.
+      if (a.footprint.fidelity === "estimated") score *= 0.5;
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "value_area",
+    name: "Value Area / Auction",
+    description:
+      "Auction theory: fade the extremes while price is balanced inside value, follow the move once it is accepted outside.",
+    defaultWeight: 1.0,
+    evaluate: (a: A) => {
+      const vp = a.volumeProfile;
+      const price = a.price;
+      let score = 0;
+      const reasons: string[] = [];
+
+      if (vp.auctionState === "balance") {
+        // Inside value → mean-revert toward the POC.
+        const toPoc = vp.poc - price;
+        const span = Math.max(vp.vah - vp.val, 1e-9);
+        const pull = (toPoc / span) * 55;
+        score += pull;
+        if (Math.abs(pull) > 6) {
+          reasons.push(
+            `Balanced auction inside value — price at ${price.toFixed(4)} should rotate toward the Point of Control at ${vp.poc.toFixed(4)}.`
+          );
+        }
+      } else if (vp.acceptance === "above_value") {
+        score += 32;
+        reasons.push(
+          `Price has been accepted ABOVE the value area (VAH ${vp.vah.toFixed(4)}) — the auction is seeking higher value, which favours continuation while that level holds.`
+        );
+      } else {
+        score -= 32;
+        reasons.push(
+          `Price has been accepted BELOW the value area (VAL ${vp.val.toFixed(4)}) — the auction is seeking lower value, which favours continuation while that level caps.`
+        );
+      }
+
+      // Profile shape at an extreme is a reversal tell.
+      if (vp.shape === "P" && price > vp.poc) {
+        score -= 18;
+        reasons.push("P-shaped profile printed into the highs — short covering rather than fresh buying, so the rally is hollow.");
+      }
+      if (vp.shape === "b" && price < vp.poc) {
+        score += 18;
+        reasons.push("b-shaped profile printed into the lows — long liquidation rather than fresh selling, so the decline is forced and prone to snapping back.");
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "lvn_rejection",
+    name: "LVN Rejection",
+    description:
+      "Trade reactions at Low Volume Nodes — prices the market previously refused to accept and rips through.",
+    defaultWeight: 0.85,
+    evaluate: (a: A) => {
+      const price = a.price;
+      let score = 0;
+      const reasons: string[] = [];
+      for (const lvn of a.volumeProfile.lvns) {
+        const dist = Math.abs(price - lvn.price) / Math.max(price, 1e-9);
+        if (dist > 0.003) continue;
+        // Direction of rejection follows the prevailing trend read.
+        const dir = a.structure.trend === "bearish" ? -1 : a.structure.trend === "bullish" ? 1 : 0;
+        if (dir === 0) continue;
+        score += dir * 34;
+        reasons.push(
+          `Price is testing a Low Volume Node at ${lvn.price.toFixed(4)} — it was rejected here before and volume nodes this thin rarely hold price, so expect a fast move away rather than consolidation.`
+        );
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "vwap_reversion",
+    name: "VWAP",
+    description:
+      "Institutional execution benchmark — trade the reclaim/rejection and fade statistically stretched extensions.",
+    defaultWeight: 0.85,
+    evaluate: (a: A) => {
+      const v = a.vwap;
+      const price = a.price;
+      let score = 0;
+      const reasons: string[] = [];
+
+      if (price > v.upperBand2) {
+        score -= 30;
+        reasons.push(`Price is beyond the +2σ VWAP band (${v.upperBand2.toFixed(4)}) — statistically stretched above fair value; execution algos become net sellers here.`);
+      } else if (price < v.lowerBand2) {
+        score += 30;
+        reasons.push(`Price is beyond the −2σ VWAP band (${v.lowerBand2.toFixed(4)}) — statistically stretched below fair value; execution algos become net buyers here.`);
+      } else {
+        // Inside the bands VWAP acts as directional bias.
+        const bias = v.position === "above" ? 20 : -20;
+        score += bias;
+        reasons.push(
+          `Price is holding ${v.position} VWAP (${v.current.toFixed(4)}), ${Math.abs(v.distancePct).toFixed(2)}% away — ${v.position === "above" ? "buyers" : "sellers"} control the volume-weighted fair price.`
+        );
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "moving_average",
+    name: "Moving Average Stack",
+    description: "Directional bias from alignment across the key EMA/SMA stack.",
+    defaultWeight: 0.7,
+    evaluate: (a: A) => {
+      const ma = a.movingAverages;
+      if (ma.averages.length === 0) return { score: 0, reasons: [] };
+      const above = ma.averages.filter((x) => x.position === "above").length;
+      const ratio = above / ma.averages.length;
+      let score = (ratio - 0.5) * 60;
+      const reasons: string[] = [];
+      if (Math.abs(score) > 8) {
+        reasons.push(`Price trades above ${above}/${ma.averages.length} key moving averages — ${ma.alignment} stack alignment.`);
+      }
+      if (ma.goldenCross) { score += 15; reasons.push("Golden cross active (EMA 50 above SMA 200)."); }
+      if (ma.deathCross) { score -= 15; reasons.push("Death cross active (EMA 50 below SMA 200)."); }
+      return { score: clamp(score), reasons };
+    },
+  },
+  {
+    key: "fibonacci",
+    name: "Fibonacci",
+    description: "Trend-aligned retracement entries, weighted toward the golden pocket.",
+    defaultWeight: 0.7,
+    evaluate: (a: A) => {
+      const fib = a.fibonacci;
+      const active = fib.activeLevel;
+      if (!active || active.kind !== "retracement") return { score: 0, reasons: [] };
+      if (active.ratio <= 0 || active.ratio >= 1) return { score: 0, reasons: [] };
+
+      // A retracement is an entry INTO the direction of the original leg.
+      const dir = fib.direction === "up" ? 1 : -1;
+      let magnitude = 22;
+      if (active.isGoldenPocket) magnitude = 40;
+      else if (active.ratio === 0.5) magnitude = 30;
+      // Deep retracements past 0.786 threaten the leg rather than support it.
+      if (active.ratio >= 0.786) magnitude = 10;
+
+      return {
+        score: clamp(dir * magnitude),
+        reasons: [
+          `Price is reacting at the ${active.label} retracement (${active.price.toFixed(4)}) of the prior ${fib.direction === "up" ? "rally" : "decline"}${active.isGoldenPocket ? " — inside the golden pocket, the highest-probability continuation entry" : ""}.`,
+        ],
+      };
+    },
+  },
+  {
+    key: "liquidation_delta",
+    name: "Liquidation Delta",
+    description:
+      "Read forced flow: fade cascades once the trapped cohort has been cleared out.",
+    defaultWeight: 0.8,
+    evaluate: (a: A) => {
+      const ld = a.liquidationDelta;
+      if (ld.dominantSide === "balanced" || ld.series.length === 0) return { score: 0, reasons: [] };
+      // Heavy long liquidation = forced selling that exhausts → bullish fade.
+      const score = ld.dominantSide === "long" ? 28 : -28;
+      return {
+        score: clamp(score),
+        reasons: [
+          ld.summary[0] ?? `Forced flow dominated by ${ld.dominantSide} liquidations.`,
+          `Liquidation-driven moves are price-insensitive and exhaust once the cohort is cleared, so the final flush is usually better faded than chased.`,
+        ],
+      };
+    },
+  },
+  {
+    key: "equal_level_liquidity",
+    name: "Equal Highs / Lows",
+    description:
+      "Target unswept equal highs/lows — the resting stop pools that price reliably runs before reversing.",
+    defaultWeight: 0.8,
+    evaluate: (a: A) => {
+      const unswept = a.equalLevels.filter((l) => !l.swept);
+      if (unswept.length === 0) return { score: 0, reasons: [] };
+      let score = 0;
+      const reasons: string[] = [];
+      const price = a.price;
+      for (const lvl of unswept.slice(0, 2)) {
+        const distPct = Math.abs(lvl.price - price) / price;
+        if (distPct > 0.03) continue;
+        // Price is drawn toward unswept liquidity.
+        const pull = Math.max(8, 30 - distPct * 600);
+        score += lvl.kind === "EQH" ? pull : -pull;
+        reasons.push(lvl.note);
+      }
+      return { score: clamp(score), reasons };
+    },
+  },
 ];
 
 export function evaluateStrategies(

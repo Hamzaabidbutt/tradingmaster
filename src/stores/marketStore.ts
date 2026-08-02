@@ -14,6 +14,23 @@ export interface OverlayToggles {
   supplyDemand: boolean;
   tradeLevels: boolean;
   patterns: boolean;
+  /** volume histogram + printed volume numbers */
+  volume: boolean;
+  volumeNumbers: boolean;
+  /** per-bar delta row with numbers */
+  deltaNumbers: boolean;
+  /** aggregate liquidation delta row */
+  liquidationDelta: boolean;
+  volumeProfile: boolean;
+  vwap: boolean;
+  movingAverages: boolean;
+  fibonacci: boolean;
+  equalLevels: boolean;
+  /** absorption / exhaustion / trapped-trader markers */
+  orderFlowEvents: boolean;
+  /** big-trade "bubbles" */
+  bigTrades: boolean;
+  cvd: boolean;
 }
 
 interface MarketState {
@@ -42,6 +59,18 @@ export const useMarketStore = create<MarketState>()(
         supplyDemand: false,
         tradeLevels: true,
         patterns: true,
+        volume: true,
+        volumeNumbers: false,
+        deltaNumbers: true,
+        liquidationDelta: false,
+        volumeProfile: true,
+        vwap: true,
+        movingAverages: false,
+        fibonacci: false,
+        equalLevels: true,
+        orderFlowEvents: true,
+        bigTrades: true,
+        cvd: false,
       },
       sidebarCollapsed: false,
       setSymbol: (symbol) => set({ symbol }),
@@ -50,6 +79,23 @@ export const useMarketStore = create<MarketState>()(
         set((s) => ({ overlays: { ...s.overlays, [key]: !s.overlays[key] } })),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
     }),
-    { name: "tm-market" }
+    {
+      name: "tm-market",
+      version: 2,
+      /**
+       * Overlay toggles are additive over time. Merge persisted values on
+       * top of the current defaults so a browser holding an older shape
+       * still receives newly added overlays (instead of them arriving as
+       * `undefined` and silently rendering nothing).
+       */
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as Partial<MarketState>;
+        return {
+          ...current,
+          ...saved,
+          overlays: { ...current.overlays, ...(saved.overlays ?? {}) },
+        };
+      },
+    }
   )
 );

@@ -10,6 +10,9 @@ import OrderFlowPanel from "@/components/panels/OrderFlowPanel";
 import LiquidationPanel from "@/components/panels/LiquidationPanel";
 import StructurePanel from "@/components/panels/StructurePanel";
 import LevelsPanel from "@/components/panels/LevelsPanel";
+import VolumeProfilePanel from "@/components/panels/VolumeProfilePanel";
+import FootprintPanel from "@/components/panels/FootprintPanel";
+import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
 import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
 import { useMarketStore } from "@/stores/marketStore";
@@ -86,7 +89,14 @@ export default function TerminalPage() {
         </div>
       </div>
 
-      {/* Levels & patterns — full width below on smaller screens */}
+      {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 lg:grid-cols-3">
+        <div className="min-h-[440px]"><FootprintPanel analysis={analysis} /></div>
+        <div className="min-h-[440px]"><VolumeProfilePanel analysis={analysis} /></div>
+        <div className="min-h-[440px]"><OrderFlowEventsPanel analysis={analysis} /></div>
+      </div>
+
+      {/* Levels & patterns */}
       <div className="p-3 pt-0">
         <div className="max-h-[400px]">
           <LevelsPanel analysis={analysis} />
