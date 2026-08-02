@@ -474,6 +474,66 @@ export interface LiquidationDeltaResult {
   summary: string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * Market Pulse — recent-window conclusion
+ * ------------------------------------------------------------------ */
+
+export interface RecentWindowSummary {
+  windowMinutes: number;
+  from: number;
+  to: number;
+  priceStart: number;
+  priceEnd: number;
+  changePct: number;
+  high: number;
+  low: number;
+  totalVolume: number;
+  buyVolume: number;
+  sellVolume: number;
+  delta: number;
+  buyPct: number;
+  volumeMultiple: number;
+  rangeMultiple: number;
+  volumeTrendPct: number;
+  /** where business actually got done in the window */
+  mostTradedPrices: { price: number; volume: number; share: number; buyShare: number }[];
+  poc: number;
+  /** candles that closed against their own delta — absorbed aggression */
+  absorptionCandles: {
+    time: number;
+    type: "bearish_positive_delta" | "bullish_negative_delta";
+    open: number;
+    close: number;
+    delta: number;
+    volume: number;
+    volumeMultiple: number;
+    note: string;
+  }[];
+  /** the price band that soaked up the bulk of the volume */
+  institutionalZones: {
+    priceLow: number;
+    priceHigh: number;
+    volume: number;
+    share: number;
+    side: "accumulation" | "distribution" | "neutral";
+    note: string;
+  }[];
+  bigTrades: { time: number; price: number; side: "buy" | "sell"; volume: number; multiple: number }[];
+  sweeps: { time: number; price: number; direction: "above" | "below"; note: string }[];
+  /** transparent breakdown of what produced the odds */
+  factors: { label: string; points: number; detail: string }[];
+  bullishOdds: number;
+  bearishOdds: number;
+  nextMove: {
+    direction: Bias;
+    target: number;
+    invalidation: number;
+    rationale: string[];
+  };
+  verdict: string;
+  keyTakeaways: string[];
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -526,6 +586,8 @@ export interface FullAnalysis {
   fibonacci: FibonacciResult;
   equalLevels: EqualLevelLine[];
   liquidationDelta: LiquidationDeltaResult;
+  /** null when 1-minute candles were unavailable */
+  pulse: RecentWindowSummary | null;
   bias: Bias;
   bullishProbability: number;
   bearishProbability: number;

@@ -15,6 +15,7 @@ import FootprintPanel from "@/components/panels/FootprintPanel";
 import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
 import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
+import { useCandleCountdown } from "@/hooks/useCandleCountdown";
 import { useMarketStore } from "@/stores/marketStore";
 import { MARKETS } from "@/lib/config";
 import { Candle } from "@/engines/types";
@@ -36,6 +37,7 @@ export default function TerminalPage() {
   const { analysis } = useAnalysis(symbol, timeframe);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const { formatted } = useCandleCountdown(timeframe, candles[candles.length - 1]?.time);
 
   // Historical candles for the chart (analysis polls separately server-side).
   useEffect(() => {
@@ -51,12 +53,35 @@ export default function TerminalPage() {
     };
     setCandles([]);
     load();
-    const t = setInterval(load, 30_000);
+    // Slow reconciliation only — the websocket is the live source of truth.
+    const t = setInterval(load, 60_000);
     return () => {
       stop = true;
       clearInterval(t);
     };
   }, [symbol, timeframe]);
+
+  // Fold finished websocket candles straight into local state so a new bar
+  // appears the instant it closes instead of waiting for the next poll.
+  useEffect(() => {
+    if (!kline?.closed) return;
+    setCandles((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (kline.time < last.time) return prev;
+      const bar: Candle = {
+        time: kline.time,
+        open: kline.open,
+        high: kline.high,
+        low: kline.low,
+        close: kline.close,
+        volume: kline.volume,
+        takerBuyVolume: kline.takerBuyVolume,
+      };
+      if (kline.time === last.time) return [...prev.slice(0, -1), bar];
+      return [...prev.slice(-499), bar];
+    });
+  }, [kline?.closed, kline?.time]);
 
   return (
     <AppShell>
@@ -71,6 +96,9 @@ export default function TerminalPage() {
               analysis={analysis}
               overlays={overlays}
               pricePrecision={market?.pricePrecision ?? 4}
+              datasetKey={`${symbol}:${timeframe}`}
+              countdown={formatted}
+              livePrice={price}
             />
           </div>
         </div>
@@ -80,9 +108,11 @@ export default function TerminalPage() {
           <AIInsightPanel analysis={analysis} />
         </div>
 
-        {/* Bottom intelligence row */}
-        <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-          <div className="min-h-[320px] 2xl:min-h-0"><SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} /></div>
+        {/* Bottom intelligence row — the pulse/signal panel gets extra width */}
+        <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-5">
+          <div className="min-h-[520px] sm:col-span-2 2xl:min-h-0">
+            <SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
+          </div>
           <div className="min-h-[320px] 2xl:min-h-0"><OrderFlowPanel analysis={analysis} /></div>
           <div className="min-h-[320px] 2xl:min-h-0"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
           <div className="min-h-[320px] 2xl:min-h-0"><StructurePanel analysis={analysis} /></div>

@@ -53,7 +53,7 @@ export async function ensureStrategyConfigs(): Promise<void> {
  */
 export async function analyzeSymbol(symbol: string, timeframe: Timeframe): Promise<FullAnalysis> {
   const subTf = FOOTPRINT_SOURCE[timeframe];
-  const [candles, weights, subCandles] = await Promise.all([
+  const [candles, weights, subCandles, minuteCandles] = await Promise.all([
     fetchKlines(symbol, timeframe, ENGINE_DEFAULTS.analysisLookback),
     getStrategyWeights(),
     subTf
@@ -62,11 +62,17 @@ export async function analyzeSymbol(symbol: string, timeframe: Timeframe): Promi
           return null;
         })
       : Promise.resolve(null),
+    // 1m series powers the Market Pulse window independently of the chart TF.
+    fetchKlines(symbol, "1m", 90).catch((err) => {
+      logger.warn("signals.minutecandles.unavailable", { symbol, error: String(err) });
+      return null;
+    }),
   ]);
   return analyzeMarket(symbol, timeframe, candles, {
     weights,
     subCandles,
     subTimeframe: subTf ?? undefined,
+    minuteCandles,
   });
 }
 

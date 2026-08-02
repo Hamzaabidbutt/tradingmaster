@@ -25,6 +25,11 @@ interface Props {
   analysis: FullAnalysis | null;
   overlays: OverlayToggles;
   pricePrecision: number;
+  /** identity of the current dataset — changing it re-anchors the view */
+  datasetKey: string;
+  /** live countdown until the in-progress candle closes */
+  countdown?: string;
+  livePrice?: number | null;
 }
 
 const BULL = "#00e5a0";
@@ -43,7 +48,16 @@ const ROW_H = 22;
  * time/price coordinate functions so drawings stay glued to the data
  * through pan and zoom.
  */
-export default function TradingChart({ candles, liveKline, analysis, overlays, pricePrecision }: Props) {
+export default function TradingChart({
+  candles,
+  liveKline,
+  analysis,
+  overlays,
+  pricePrecision,
+  datasetKey,
+  countdown,
+  livePrice,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -54,6 +68,18 @@ export default function TradingChart({ candles, liveKline, analysis, overlays, p
   const cvdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const [ready, setReady] = useState(false);
+
+  /** Dataset currently loaded into the series — guards incremental updates. */
+  const loadedKeyRef = useRef<string | null>(null);
+  /** Timestamps already pushed into the series, so refetches can diff. */
+  const lastBarTimeRef = useRef<number>(0);
+  /** True while the user is parked at the right edge (auto-follow allowed). */
+  const followRef = useRef(true);
+  /** Latest overlay draw function, invoked on live ticks. */
+  const drawRef = useRef<(() => void) | null>(null);
+  const rafRef = useRef<number | null>(null);
+  /** Y position (px) of the live price, for the countdown badge. */
+  const [badgeY, setBadgeY] = useState<number | null>(null);
 
   /** How many numeric rows are switched on (reserves space at the bottom). */
   const numericRows =
@@ -132,39 +158,88 @@ export default function TradingChart({ candles, liveKline, analysis, overlays, p
     });
   }, [ready, numericRows]);
 
-  // --- Data feed ---
+  // --- Track whether the user is following the right edge ---
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!ready || !chart) return;
+    const ts = chart.timeScale();
+    const onRangeChange = () => {
+      const range = ts.getVisibleLogicalRange();
+      if (!range) return;
+      // Within ~2 bars of the newest bar counts as "following".
+      followRef.current = range.to >= candles.length - 2;
+    };
+    ts.subscribeVisibleLogicalRangeChange(onRangeChange);
+    return () => ts.unsubscribeVisibleLogicalRangeChange(onRangeChange);
+  }, [ready, candles.length]);
+
+  // --- Data feed (incremental: a refetch must never reset the view) ---
   useEffect(() => {
     if (!ready || !candleSeriesRef.current || candles.length === 0) return;
-    candleSeriesRef.current.setData(
-      candles.map((c) => ({
-        time: c.time as UTCTimestamp,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      })) as CandlestickData[]
-    );
-    volumeSeriesRef.current?.setData(
-      overlays.volume
-        ? (candles.map((c) => {
-            const buy = c.takerBuyVolume ?? c.volume / 2;
-            const bullBar = buy >= c.volume - buy;
-            return {
-              time: c.time as UTCTimestamp,
-              value: c.volume,
-              color: bullBar ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
-            };
-          }) as HistogramData[])
-        : []
-    );
-    chartRef.current?.timeScale().scrollToRealTime();
-  }, [ready, candles, overlays.volume]);
+    const isNewDataset = loadedKeyRef.current !== datasetKey;
 
-  // --- Live tick ---
+    const toBar = (c: Candle): CandlestickData => ({
+      time: c.time as UTCTimestamp,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    });
+    const toVol = (c: Candle): HistogramData => {
+      const buy = c.takerBuyVolume ?? c.volume / 2;
+      return {
+        time: c.time as UTCTimestamp,
+        value: c.volume,
+        color: buy >= c.volume - buy ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
+      };
+    };
+
+    if (isNewDataset) {
+      // Switching symbol/timeframe: full load, then anchor to the right edge.
+      candleSeriesRef.current.setData(candles.map(toBar));
+      volumeSeriesRef.current?.setData(overlays.volume ? candles.map(toVol) : []);
+      loadedKeyRef.current = datasetKey;
+      followRef.current = true;
+      chartRef.current?.timeScale().scrollToRealTime();
+    } else {
+      // Same dataset refreshed: only push bars at or after the newest one we
+      // already hold. This keeps the live bar intact and leaves pan/zoom alone.
+      const cutoff = lastBarTimeRef.current;
+      for (const c of candles) {
+        if (c.time < cutoff) continue;
+        candleSeriesRef.current.update(toBar(c));
+        if (overlays.volume) volumeSeriesRef.current?.update(toVol(c));
+      }
+    }
+    lastBarTimeRef.current = candles[candles.length - 1].time;
+  }, [ready, candles, overlays.volume, datasetKey]);
+
+  // Volume histogram must be rebuilt when it is toggled back on.
+  useEffect(() => {
+    if (!ready || !volumeSeriesRef.current) return;
+    if (!overlays.volume) {
+      volumeSeriesRef.current.setData([]);
+      return;
+    }
+    volumeSeriesRef.current.setData(
+      candles.map((c) => {
+        const buy = c.takerBuyVolume ?? c.volume / 2;
+        return {
+          time: c.time as UTCTimestamp,
+          value: c.volume,
+          color: buy >= c.volume - buy ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
+        };
+      }) as HistogramData[]
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, overlays.volume]);
+
+  // --- Live tick: the in-progress candle updates on every websocket frame ---
   useEffect(() => {
     if (!ready || !liveKline || !candleSeriesRef.current) return;
-    const lastTime = candles[candles.length - 1]?.time ?? 0;
-    if (liveKline.time < lastTime) return;
+    // Ignore frames older than what the series already holds.
+    if (liveKline.time < lastBarTimeRef.current) return;
+
     candleSeriesRef.current.update({
       time: liveKline.time as UTCTimestamp,
       open: liveKline.open,
@@ -180,7 +255,29 @@ export default function TradingChart({ candles, liveKline, analysis, overlays, p
         color: buy >= liveKline.volume - buy ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
       });
     }
-  }, [ready, liveKline, candles, overlays.volume]);
+
+    // A brand-new bar opened — extend the view only if the user is following.
+    if (liveKline.time > lastBarTimeRef.current) {
+      lastBarTimeRef.current = liveKline.time;
+      if (followRef.current) chartRef.current?.timeScale().scrollToRealTime();
+    }
+
+    // Keep overlays and the countdown badge glued to the live price.
+    if (rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        drawRef.current?.();
+        const y = candleSeriesRef.current?.priceToCoordinate(liveKline.close);
+        setBadgeY(y ?? null);
+      });
+    }
+  }, [ready, liveKline, overlays.volume]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   // --- Moving averages (real line series) ---
   useEffect(() => {
@@ -703,6 +800,8 @@ export default function TradingChart({ candles, liveKline, analysis, overlays, p
       }
     };
 
+    // Expose the latest draw so live ticks can refresh overlays too.
+    drawRef.current = draw;
     draw();
     const ts = chart.timeScale();
     ts.subscribeVisibleTimeRangeChange(draw);
@@ -711,13 +810,49 @@ export default function TradingChart({ candles, liveKline, analysis, overlays, p
     return () => {
       ts.unsubscribeVisibleTimeRangeChange(draw);
       ro.disconnect();
+      if (drawRef.current === draw) drawRef.current = null;
     };
   }, [ready, analysis, overlays, candles, pricePrecision]);
+
+  // Keep the badge anchored when the price scale shifts without a new tick.
+  useEffect(() => {
+    if (!ready || livePrice == null || !candleSeriesRef.current) return;
+    setBadgeY(candleSeriesRef.current.priceToCoordinate(livePrice) ?? null);
+  }, [ready, livePrice, candles]);
+
+  const bullishBar =
+    liveKline != null ? liveKline.close >= liveKline.open : true;
 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
+
+      {/* Live price + candle countdown, pinned to the right price axis */}
+      {countdown && badgeY != null && (
+        <div
+          className="pointer-events-none absolute right-0 z-10 flex -translate-y-1/2 flex-col items-end gap-[2px]"
+          style={{ top: badgeY }}
+        >
+          {livePrice != null && (
+            <span
+              className={`rounded-sm px-1.5 py-[1px] font-mono text-[10px] font-bold text-base-950 ${
+                bullishBar ? "bg-bull" : "bg-bear"
+              }`}
+            >
+              {livePrice.toFixed(pricePrecision)}
+            </span>
+          )}
+          <span
+            className={`rounded-sm px-1.5 py-[1px] font-mono text-[10px] font-semibold tabular-nums ${
+              bullishBar ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
+            }`}
+            title="Time remaining until the current candle closes"
+          >
+            {countdown}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

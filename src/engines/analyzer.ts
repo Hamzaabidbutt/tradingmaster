@@ -20,6 +20,7 @@ import { detectSupportResistance } from "./supportResistance";
 import { Candle, FullAnalysis } from "./types";
 import { analyzeVolume } from "./volume";
 import { buildVolumeProfile } from "./volumeProfile";
+import { buildPulse } from "./pulse";
 
 export interface AnalyzeOptions {
   weights?: Record<string, { weight: number; enabled: boolean }>;
@@ -32,6 +33,12 @@ export interface AnalyzeOptions {
    */
   subCandles?: Candle[] | null;
   subTimeframe?: string;
+  /**
+   * 1-minute candles used by the Market Pulse engine so the recent-window
+   * conclusion stays granular regardless of the chart timeframe.
+   */
+  minuteCandles?: Candle[] | null;
+  pulseWindowMinutes?: number;
 }
 
 /**
@@ -92,6 +99,12 @@ export function analyzeMarket(
   const vwap = computeVwap(candles);
   const fibonacci = computeFibonacci(candles, structure.swings);
 
+  // --- Recent-window conclusion (falls back to the chart series when no
+  // 1m data is supplied, e.g. inside backtests) ---
+  const pulse = buildPulse(opts.minuteCandles ?? candles, {
+    windowMinutes: opts.pulseWindowMinutes ?? 5,
+  });
+
   const core = {
     symbol,
     timeframe,
@@ -118,6 +131,7 @@ export function analyzeMarket(
     fibonacci,
     equalLevels,
     liquidationDelta,
+    pulse,
   };
 
   const strategyScores = evaluateStrategies(core, opts.weights);
