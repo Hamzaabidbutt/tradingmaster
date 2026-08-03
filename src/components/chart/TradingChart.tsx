@@ -18,6 +18,7 @@ import {
 import { Candle, FullAnalysis } from "@/engines/types";
 import { OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
+import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
 
 interface Props {
   candles: Candle[];
@@ -71,8 +72,18 @@ export default function TradingChart({
 
   /** Dataset currently loaded into the series — guards incremental updates. */
   const loadedKeyRef = useRef<string | null>(null);
-  /** Timestamps already pushed into the series, so refetches can diff. */
-  const lastBarTimeRef = useRef<number>(0);
+  /**
+   * Newest bar time actually pushed into the series.
+   *
+   * lightweight-charts refuses `update()` with a time older than the series
+   * head ("Cannot update oldest data"), and the websocket routinely opens a
+   * new bar before a REST poll returns — so a poll's tail can legitimately
+   * be older than what the chart already holds. This value must therefore
+   * only ever move forward; it is never derived from the incoming array.
+   */
+  const seriesHeadRef = useRef<number>(0);
+  /** Set before chart.remove() so late async callbacks bail out. */
+  const disposedRef = useRef(false);
   /** True while the user is parked at the right edge (auto-follow allowed). */
   const followRef = useRef(true);
   /** Latest overlay draw function, invoked on live ticks. */
@@ -112,7 +123,10 @@ export default function TradingChart({
         timeVisible: true,
         secondsVisible: false,
       },
-      autoSize: true,
+      // Sizing is driven manually below. The library's built-in autoSize
+      // observer can fire after remove() and throw "Object is disposed".
+      width: el.clientWidth,
+      height: el.clientHeight,
     });
 
     const candleSeries = chart.addCandlestickSeries({
@@ -132,30 +146,61 @@ export default function TradingChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
+    disposedRef.current = false;
+    // A fresh chart holds no bars — force the next feed to do a full load.
+    loadedKeyRef.current = null;
+    seriesHeadRef.current = 0;
     setReady(true);
 
+    // Own the resize loop so it can be stopped before disposal.
+    const resize = new ResizeObserver(() => {
+      if (disposedRef.current) return;
+      try {
+        chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+      } catch {
+        /* chart disposed between the check and the call */
+      }
+    });
+    resize.observe(el);
+
     return () => {
-      chart.remove();
+      // Order matters: stop every callback source before disposing, so no
+      // late observer/rAF frame can touch a destroyed chart.
+      disposedRef.current = true;
+      resize.disconnect();
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      drawRef.current = null;
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       maSeriesRef.current.clear();
       vwapSeriesRef.current = null;
       cvdSeriesRef.current = null;
+      priceLinesRef.current = [];
+      loadedKeyRef.current = null;
+      seriesHeadRef.current = 0;
       setReady(false);
+      chart.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pricePrecision]);
 
   // Reserve bottom space for the numeric rows so they never cover candles.
   useEffect(() => {
-    if (!ready || !candleSeriesRef.current) return;
+    if (!ready || disposedRef.current || !candleSeriesRef.current) return;
     const el = containerRef.current;
     const h = el?.clientHeight ?? 500;
     const reserved = Math.min(0.4, (numericRows * ROW_H + 8) / Math.max(h, 1));
-    candleSeriesRef.current.priceScale().applyOptions({
-      scaleMargins: { top: 0.06, bottom: Math.max(0.12, reserved + 0.1) },
-    });
+    try {
+      candleSeriesRef.current.priceScale().applyOptions({
+        scaleMargins: { top: 0.06, bottom: Math.max(0.12, reserved + 0.1) },
+      });
+    } catch {
+      /* disposed */
+    }
   }, [ready, numericRows]);
 
   // --- Track whether the user is following the right edge ---
@@ -170,7 +215,10 @@ export default function TradingChart({
       followRef.current = range.to >= candles.length - 2;
     };
     ts.subscribeVisibleLogicalRangeChange(onRangeChange);
-    return () => ts.unsubscribeVisibleLogicalRangeChange(onRangeChange);
+    return () => {
+      if (disposedRef.current) return;
+      try { ts.unsubscribeVisibleLogicalRangeChange(onRangeChange); } catch { /* disposed */ }
+    };
   }, [ready, candles.length]);
 
   // --- Data feed (incremental: a refetch must never reset the view) ---
@@ -194,33 +242,49 @@ export default function TradingChart({
       };
     };
 
-    if (isNewDataset) {
-      // Switching symbol/timeframe: full load, then anchor to the right edge.
-      candleSeriesRef.current.setData(candles.map(toBar));
-      volumeSeriesRef.current?.setData(overlays.volume ? candles.map(toVol) : []);
-      loadedKeyRef.current = datasetKey;
-      followRef.current = true;
-      chartRef.current?.timeScale().scrollToRealTime();
-    } else {
-      // Same dataset refreshed: only push bars at or after the newest one we
-      // already hold. This keeps the live bar intact and leaves pan/zoom alone.
-      const cutoff = lastBarTimeRef.current;
-      for (const c of candles) {
-        if (c.time < cutoff) continue;
-        candleSeriesRef.current.update(toBar(c));
-        if (overlays.volume) volumeSeriesRef.current?.update(toVol(c));
+    try {
+      if (isNewDataset) {
+        // Switching symbol/timeframe: full load, then anchor to the right edge.
+        candleSeriesRef.current.setData(candles.map(toBar));
+        volumeSeriesRef.current?.setData(overlays.volume ? candles.map(toVol) : []);
+        loadedKeyRef.current = datasetKey;
+        followRef.current = true;
+        seriesHeadRef.current = candles[candles.length - 1].time;
+        chartRef.current?.timeScale().scrollToRealTime();
+      } else {
+        // Same dataset refreshed. Only push bars at or after the series head:
+        // a REST response can legitimately be older than the live bar the
+        // websocket already opened, and update() cannot rewrite history.
+        const { bars, nextHead } = selectBarsToAppend(candles, seriesHeadRef.current);
+        for (const c of bars) {
+          candleSeriesRef.current.update(toBar(c));
+          if (overlays.volume) volumeSeriesRef.current?.update(toVol(c));
+        }
+        // Monotonic by construction — never regresses on a stale poll.
+        seriesHeadRef.current = nextHead;
+      }
+    } catch (err) {
+      // A rejected update means our head tracking drifted from the series
+      // (e.g. a dataset swap raced a poll). Rebuild rather than stay broken.
+      if (process.env.NODE_ENV !== "production") console.warn("chart feed resync", err);
+      try {
+        candleSeriesRef.current.setData(candles.map(toBar));
+        volumeSeriesRef.current?.setData(overlays.volume ? candles.map(toVol) : []);
+        seriesHeadRef.current = candles[candles.length - 1].time;
+      } catch {
+        /* chart disposed mid-update */
       }
     }
-    lastBarTimeRef.current = candles[candles.length - 1].time;
   }, [ready, candles, overlays.volume, datasetKey]);
 
   // Volume histogram must be rebuilt when it is toggled back on.
   useEffect(() => {
-    if (!ready || !volumeSeriesRef.current) return;
+    if (!ready || disposedRef.current || !volumeSeriesRef.current) return;
     if (!overlays.volume) {
-      volumeSeriesRef.current.setData([]);
+      try { volumeSeriesRef.current.setData([]); } catch { /* disposed */ }
       return;
     }
+    try {
     volumeSeriesRef.current.setData(
       candles.map((c) => {
         const buy = c.takerBuyVolume ?? c.volume / 2;
@@ -231,58 +295,63 @@ export default function TradingChart({
         };
       }) as HistogramData[]
     );
+    } catch { /* disposed */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, overlays.volume]);
 
   // --- Live tick: the in-progress candle updates on every websocket frame ---
   useEffect(() => {
-    if (!ready || !liveKline || !candleSeriesRef.current) return;
-    // Ignore frames older than what the series already holds.
-    if (liveKline.time < lastBarTimeRef.current) return;
+    if (!ready || !liveKline || disposedRef.current || !candleSeriesRef.current) return;
+    // Rejects stale frames and refuses to update an empty series.
+    if (!canApplyLiveFrame(liveKline.time, seriesHeadRef.current)) return;
 
-    candleSeriesRef.current.update({
-      time: liveKline.time as UTCTimestamp,
-      open: liveKline.open,
-      high: liveKline.high,
-      low: liveKline.low,
-      close: liveKline.close,
-    });
-    if (overlays.volume) {
-      const buy = liveKline.takerBuyVolume ?? liveKline.volume / 2;
-      volumeSeriesRef.current?.update({
+    const openedNewBar = liveKline.time > seriesHeadRef.current;
+    try {
+      candleSeriesRef.current.update({
         time: liveKline.time as UTCTimestamp,
-        value: liveKline.volume,
-        color: buy >= liveKline.volume - buy ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
+        open: liveKline.open,
+        high: liveKline.high,
+        low: liveKline.low,
+        close: liveKline.close,
       });
+      if (overlays.volume) {
+        const buy = liveKline.takerBuyVolume ?? liveKline.volume / 2;
+        volumeSeriesRef.current?.update({
+          time: liveKline.time as UTCTimestamp,
+          value: liveKline.volume,
+          color: buy >= liveKline.volume - buy ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
+        });
+      }
+      seriesHeadRef.current = liveKline.time;
+    } catch {
+      // Disposed or out-of-order; the next poll rebuilds the series.
+      return;
     }
 
     // A brand-new bar opened — extend the view only if the user is following.
-    if (liveKline.time > lastBarTimeRef.current) {
-      lastBarTimeRef.current = liveKline.time;
-      if (followRef.current) chartRef.current?.timeScale().scrollToRealTime();
+    if (openedNewBar && followRef.current) {
+      try { chartRef.current?.timeScale().scrollToRealTime(); } catch { /* disposed */ }
     }
 
     // Keep overlays and the countdown badge glued to the live price.
     if (rafRef.current == null) {
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
+        if (disposedRef.current) return;
         drawRef.current?.();
-        const y = candleSeriesRef.current?.priceToCoordinate(liveKline.close);
-        setBadgeY(y ?? null);
+        try {
+          setBadgeY(candleSeriesRef.current?.priceToCoordinate(liveKline.close) ?? null);
+        } catch {
+          /* disposed between frames */
+        }
       });
     }
   }, [ready, liveKline, overlays.volume]);
 
-  useEffect(() => {
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-
   // --- Moving averages (real line series) ---
   useEffect(() => {
     const chart = chartRef.current;
-    if (!ready || !chart) return;
+    if (!ready || !chart || disposedRef.current) return;
     const seriesMap = maSeriesRef.current;
 
     if (!overlays.movingAverages || !analysis) {
@@ -319,7 +388,7 @@ export default function TradingChart({
   // --- VWAP ---
   useEffect(() => {
     const chart = chartRef.current;
-    if (!ready || !chart) return;
+    if (!ready || !chart || disposedRef.current) return;
     if (!overlays.vwap || !analysis) {
       if (vwapSeriesRef.current) {
         try { chart.removeSeries(vwapSeriesRef.current); } catch { /* disposed */ }
@@ -346,7 +415,7 @@ export default function TradingChart({
   // --- CVD (own scale, drawn as an overlay line) ---
   useEffect(() => {
     const chart = chartRef.current;
-    if (!ready || !chart) return;
+    if (!ready || !chart || disposedRef.current) return;
     if (!overlays.cvd || !analysis) {
       if (cvdSeriesRef.current) {
         try { chart.removeSeries(cvdSeriesRef.current); } catch { /* disposed */ }
@@ -446,21 +515,28 @@ export default function TradingChart({
   }, [analysis, overlays]);
 
   useEffect(() => {
-    if (!ready || !candleSeriesRef.current) return;
-    candleSeriesRef.current.setMarkers(markers);
+    if (!ready || disposedRef.current || !candleSeriesRef.current) return;
+    try { candleSeriesRef.current.setMarkers(markers); } catch { /* disposed */ }
   }, [ready, markers]);
 
   // --- Price lines: S/R, liquidity, trade levels, POC/VA, delta spikes ---
   useEffect(() => {
     const series = candleSeriesRef.current;
-    if (!ready || !series || !analysis) return;
-    for (const pl of priceLinesRef.current) series.removePriceLine(pl);
+    if (!ready || !series || !analysis || disposedRef.current) return;
+    for (const pl of priceLinesRef.current) {
+      try { series.removePriceLine(pl); } catch { /* disposed */ }
+    }
     priceLinesRef.current = [];
 
     const add = (price: number, color: string, title: string, style = LineStyle.Dashed, width: 1 | 2 = 1) => {
-      priceLinesRef.current.push(
-        series.createPriceLine({ price, color, title, lineStyle: style, lineWidth: width, axisLabelVisible: true })
-      );
+      if (!Number.isFinite(price)) return;
+      try {
+        priceLinesRef.current.push(
+          series.createPriceLine({ price, color, title, lineStyle: style, lineWidth: width, axisLabelVisible: true })
+        );
+      } catch {
+        /* disposed */
+      }
     };
 
     if (overlays.supportResistance) {
@@ -508,8 +584,10 @@ export default function TradingChart({
     }
 
     return () => {
-      for (const pl of priceLinesRef.current) {
-        try { series.removePriceLine(pl); } catch { /* series disposed */ }
+      if (!disposedRef.current) {
+        for (const pl of priceLinesRef.current) {
+          try { series.removePriceLine(pl); } catch { /* series disposed */ }
+        }
       }
       priceLinesRef.current = [];
     };
@@ -521,9 +599,12 @@ export default function TradingChart({
     const series = candleSeriesRef.current;
     const canvas = overlayRef.current;
     const el = containerRef.current;
-    if (!ready || !chart || !series || !canvas || !el) return;
+    if (!ready || !chart || !series || !canvas || !el || disposedRef.current) return;
 
     const draw = () => {
+      // The chart can be torn down between a scheduled frame and its
+      // execution; every coordinate call below would then throw.
+      if (disposedRef.current || !chartRef.current || !candleSeriesRef.current) return;
       const dpr = window.devicePixelRatio || 1;
       const w = el.clientWidth;
       const h = el.clientHeight;
@@ -800,24 +881,39 @@ export default function TradingChart({
       }
     };
 
+    // Every draw entry point is wrapped so a disposal race can never
+    // surface as an uncaught "Object is disposed".
+    const safeDraw = () => {
+      try {
+        draw();
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") console.warn("overlay draw skipped", err);
+      }
+    };
+
     // Expose the latest draw so live ticks can refresh overlays too.
-    drawRef.current = draw;
-    draw();
+    drawRef.current = safeDraw;
+    safeDraw();
     const ts = chart.timeScale();
-    ts.subscribeVisibleTimeRangeChange(draw);
-    const ro = new ResizeObserver(draw);
+    ts.subscribeVisibleTimeRangeChange(safeDraw);
+    const ro = new ResizeObserver(safeDraw);
     ro.observe(el);
     return () => {
-      ts.unsubscribeVisibleTimeRangeChange(draw);
       ro.disconnect();
-      if (drawRef.current === draw) drawRef.current = null;
+      if (drawRef.current === safeDraw) drawRef.current = null;
+      if (disposedRef.current) return;
+      try { ts.unsubscribeVisibleTimeRangeChange(safeDraw); } catch { /* disposed */ }
     };
   }, [ready, analysis, overlays, candles, pricePrecision]);
 
   // Keep the badge anchored when the price scale shifts without a new tick.
   useEffect(() => {
-    if (!ready || livePrice == null || !candleSeriesRef.current) return;
-    setBadgeY(candleSeriesRef.current.priceToCoordinate(livePrice) ?? null);
+    if (!ready || livePrice == null || disposedRef.current || !candleSeriesRef.current) return;
+    try {
+      setBadgeY(candleSeriesRef.current.priceToCoordinate(livePrice) ?? null);
+    } catch {
+      /* disposed */
+    }
   }, [ready, livePrice, candles]);
 
   const bullishBar =
