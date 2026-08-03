@@ -67,6 +67,7 @@ export default function TradingChart({
   const maSeriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cvdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const [ready, setReady] = useState(false);
 
@@ -96,7 +97,8 @@ export default function TradingChart({
   const numericRows =
     (overlays.volumeNumbers ? 1 : 0) +
     (overlays.deltaNumbers ? 1 : 0) +
-    (overlays.liquidationDelta ? 1 : 0);
+    (overlays.liquidationDelta ? 1 : 0) +
+    (overlays.pressure ? 1 : 0);
 
   // --- Chart lifecycle ---
   useEffect(() => {
@@ -179,6 +181,7 @@ export default function TradingChart({
       maSeriesRef.current.clear();
       vwapSeriesRef.current = null;
       cvdSeriesRef.current = null;
+      liqCumSeriesRef.current = null;
       priceLinesRef.current = [];
       loadedKeyRef.current = null;
       seriesHeadRef.current = 0;
@@ -438,6 +441,41 @@ export default function TradingChart({
       analysis.delta.series.map((d) => ({ time: d.time as UTCTimestamp, value: d.cvd }))
     );
   }, [ready, analysis, overlays.cvd]);
+
+  // --- Aggregate liquidation delta, cumulative (forced-flow balance) ---
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!ready || !chart || disposedRef.current) return;
+    if (!overlays.liquidationCumulative || !analysis) {
+      if (liqCumSeriesRef.current) {
+        try { chart.removeSeries(liqCumSeriesRef.current); } catch { /* disposed */ }
+        liqCumSeriesRef.current = null;
+      }
+      return;
+    }
+    if (!liqCumSeriesRef.current) {
+      liqCumSeriesRef.current = chart.addLineSeries({
+        color: "#f472b6",
+        lineWidth: 2,
+        priceScaleId: "liqcum",
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: "Cumulative liq Δ",
+      });
+      chart.priceScale("liqcum").applyOptions({ scaleMargins: { top: 0.08, bottom: 0.72 } });
+    }
+    try {
+      liqCumSeriesRef.current.setData(
+        analysis.liquidationDelta.series.map((d) => ({
+          time: d.time as UTCTimestamp,
+          value: d.cumulative,
+        }))
+      );
+    } catch {
+      /* disposed */
+    }
+  }, [ready, analysis, overlays.liquidationCumulative]);
 
   // --- Markers: structure, sweeps, patterns, order-flow events ---
   const markers = useMemo<SeriesMarker<Time>[]>(() => {
@@ -809,6 +847,10 @@ export default function TradingChart({
         label: string;
         valueOf: (c: Candle, i: number) => number | null;
         colorOf: (v: number) => string;
+        /** custom number formatting (defaults to compact notation) */
+        format?: (v: number) => string;
+        /** draw a background intensity band behind each value */
+        ribbon?: boolean;
       }[] = [];
 
       if (overlays.volumeNumbers) {
@@ -837,6 +879,19 @@ export default function TradingChart({
           label: "LIQΔ",
           valueOf: (c) => liqByTime.get(c.time) ?? 0,
           colorOf: (v) => (v > 0 ? "rgba(0,229,160,0.95)" : v < 0 ? "rgba(255,77,109,0.95)" : "rgba(100,116,139,0.7)"),
+        });
+      }
+      if (overlays.pressure) {
+        // Buy-side share of each bar's taker flow, printed as a percentage.
+        rowsToDraw.push({
+          label: "BUY%",
+          valueOf: (c) => {
+            const buy = c.takerBuyVolume ?? c.volume / 2;
+            return c.volume > 0 ? (buy / c.volume) * 100 : 50;
+          },
+          colorOf: (v) => (v >= 55 ? "rgba(0,229,160,0.95)" : v <= 45 ? "rgba(255,77,109,0.95)" : "rgba(148,163,184,0.85)"),
+          format: (v) => `${v.toFixed(0)}`,
+          ribbon: true,
         });
       }
 
@@ -873,8 +928,15 @@ export default function TradingChart({
             if (xn < 20 || xn > rightEdge - 4) continue;
             const v = row.valueOf(c, i);
             if (v == null) continue;
+            if (row.ribbon) {
+              // Shade the cell by how far the value leans from neutral.
+              const lean = Math.min(1, Math.abs(v - 50) / 30);
+              ctx.fillStyle =
+                v >= 50 ? `rgba(0,229,160,${0.05 + lean * 0.22})` : `rgba(255,77,109,${0.05 + lean * 0.22})`;
+              ctx.fillRect(xn - barWidth / 2, y - ROW_H / 2 + 1, Math.max(2, barWidth - 1), ROW_H - 2);
+            }
             ctx.fillStyle = row.colorOf(v);
-            ctx.fillText(compact(v), xn, y + 3);
+            ctx.fillText(row.format ? row.format(v) : compact(v), xn, y + 3);
           }
         });
         ctx.textAlign = "left";

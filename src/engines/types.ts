@@ -534,6 +534,58 @@ export interface RecentWindowSummary {
   keyTakeaways: string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * Multi-window lookback insights
+ * ------------------------------------------------------------------ */
+
+export interface WindowInsight {
+  /** number of candles this read covers */
+  bars: number;
+  from: number;
+  to: number;
+  priceStart: number;
+  priceEnd: number;
+  changePct: number;
+  high: number;
+  low: number;
+  poc: number;
+  totalVolume: number;
+  buyVolume: number;
+  sellVolume: number;
+  delta: number;
+  buyPct: number;
+  volumeMultiple: number;
+  rangeMultiple: number;
+  volumeTrendPct: number;
+  bullishCandles: number;
+  bearishCandles: number;
+  /** bars that closed against their own delta */
+  absorptionCount: number;
+  /** where the window closed inside its range, 0 = low, 1 = high */
+  closePosition: number;
+  bias: Bias;
+  bullishOdds: number;
+  headline: string;
+  detail: string;
+}
+
+export interface MultiWindowResult {
+  windows: WindowInsight[];
+  consensus: {
+    bias: Bias;
+    /** % of windows agreeing with the majority */
+    agreement: number;
+    bullishCount: number;
+    bearishCount: number;
+    neutralCount: number;
+    shortTermBias: Bias;
+    longTermBias: Bias;
+    /** short horizons disagreeing with long ones — an early-turn tell */
+    diverging: boolean;
+    summary: string[];
+  };
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -588,6 +640,7 @@ export interface FullAnalysis {
   liquidationDelta: LiquidationDeltaResult;
   /** null when 1-minute candles were unavailable */
   pulse: RecentWindowSummary | null;
+  multiWindow: MultiWindowResult;
   bias: Bias;
   bullishProbability: number;
   bearishProbability: number;

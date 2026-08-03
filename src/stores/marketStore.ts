@@ -19,8 +19,12 @@ export interface OverlayToggles {
   volumeNumbers: boolean;
   /** per-bar delta row with numbers */
   deltaNumbers: boolean;
-  /** aggregate liquidation delta row */
+  /** per-bar aggregate liquidation delta row */
   liquidationDelta: boolean;
+  /** cumulative aggregate liquidation delta line (running total) */
+  liquidationCumulative: boolean;
+  /** rolling buy-vs-sell pressure ribbon */
+  pressure: boolean;
   volumeProfile: boolean;
   vwap: boolean;
   movingAverages: boolean;
@@ -63,6 +67,8 @@ export const useMarketStore = create<MarketState>()(
         volumeNumbers: false,
         deltaNumbers: true,
         liquidationDelta: false,
+        liquidationCumulative: false,
+        pressure: false,
         volumeProfile: true,
         vwap: true,
         movingAverages: false,

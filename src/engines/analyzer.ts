@@ -21,6 +21,7 @@ import { Candle, FullAnalysis } from "./types";
 import { analyzeVolume } from "./volume";
 import { buildVolumeProfile } from "./volumeProfile";
 import { buildPulse } from "./pulse";
+import { buildMultiWindow } from "./multiWindow";
 
 export interface AnalyzeOptions {
   weights?: Record<string, { weight: number; enabled: boolean }>;
@@ -105,6 +106,9 @@ export function analyzeMarket(
     windowMinutes: opts.pulseWindowMinutes ?? 5,
   });
 
+  // --- Same tape read across several lookbacks (3/5/7/10/12/15 bars) ---
+  const multiWindow = buildMultiWindow(candles);
+
   const core = {
     symbol,
     timeframe,
@@ -132,6 +136,7 @@ export function analyzeMarket(
     equalLevels,
     liquidationDelta,
     pulse,
+    multiWindow,
   };
 
   const strategyScores = evaluateStrategies(core, opts.weights);

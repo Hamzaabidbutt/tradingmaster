@@ -20,7 +20,7 @@ export default function VolumeProfilePanel({ analysis }: { analysis: FullAnalysi
         <div className="p-4 text-xs text-slate-500">Building profile…</div>
       ) : (
         <div className="flex h-full flex-col">
-          <div className="space-y-3 p-3">
+          <div className="shrink-0 space-y-3 p-3">
             <div className="flex flex-wrap gap-1.5">
               <Tag
                 text={vp.auctionState === "balance" ? "Balanced" : "Imbalanced"}

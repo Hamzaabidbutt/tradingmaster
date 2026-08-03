@@ -13,6 +13,7 @@ import LevelsPanel from "@/components/panels/LevelsPanel";
 import VolumeProfilePanel from "@/components/panels/VolumeProfilePanel";
 import FootprintPanel from "@/components/panels/FootprintPanel";
 import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
+import MultiWindowPanel from "@/components/panels/MultiWindowPanel";
 import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
 import { useCandleCountdown } from "@/hooks/useCandleCountdown";
@@ -85,10 +86,10 @@ export default function TerminalPage() {
 
   return (
     <AppShell>
-      <div className="grid h-full grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_340px] xl:grid-rows-[minmax(0,1.4fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
         {/* Chart cell */}
-        <div className="glass flex min-h-[420px] flex-col p-3 xl:min-h-0">
-          <MarketSelector connected={connected} price={price} />
+        <div className="glass flex h-[620px] flex-col p-3">
+          <MarketSelector connected={connected} price={price} countdown={formatted} />
           <div className="min-h-0 flex-1">
             <TradingChart
               candles={candles}
@@ -104,31 +105,41 @@ export default function TerminalPage() {
         </div>
 
         {/* AI analyst — right rail, spans both rows on desktop */}
-        <div className="min-h-[420px] xl:row-span-2 xl:min-h-0">
+        <div className="h-[620px]">
           <AIInsightPanel analysis={analysis} />
         </div>
 
-        {/* Bottom intelligence row — the pulse/signal panel gets extra width */}
-        <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-5">
-          <div className="min-h-[520px] sm:col-span-2 2xl:min-h-0">
-            <SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
-          </div>
-          <div className="min-h-[320px] 2xl:min-h-0"><OrderFlowPanel analysis={analysis} /></div>
-          <div className="min-h-[320px] 2xl:min-h-0"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
-          <div className="min-h-[320px] 2xl:min-h-0"><StructurePanel analysis={analysis} /></div>
+      </div>
+
+      {/* Conclusion row: 5-min pulse + multi-window read, side by side.
+          Fixed heights keep every panel's own body scrollable rather than
+          letting content overflow and get clipped. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="h-[640px]">
+          <SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
         </div>
+        <div className="h-[640px]">
+          <MultiWindowPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
+        </div>
+      </div>
+
+      {/* Core intelligence row */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-2 2xl:grid-cols-3">
+        <div className="h-[560px]"><OrderFlowPanel analysis={analysis} /></div>
+        <div className="h-[560px]"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
+        <div className="h-[560px]"><StructurePanel analysis={analysis} /></div>
       </div>
 
       {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 lg:grid-cols-3">
-        <div className="min-h-[440px]"><FootprintPanel analysis={analysis} /></div>
-        <div className="min-h-[440px]"><VolumeProfilePanel analysis={analysis} /></div>
-        <div className="min-h-[440px]"><OrderFlowEventsPanel analysis={analysis} /></div>
+        <div className="h-[600px]"><FootprintPanel analysis={analysis} /></div>
+        <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
+        <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>
       </div>
 
       {/* Levels & patterns */}
       <div className="p-3 pt-0">
-        <div className="max-h-[400px]">
+        <div className="h-[460px]">
           <LevelsPanel analysis={analysis} />
         </div>
       </div>

@@ -13,7 +13,7 @@ export default function OrderFlowPanel({ analysis }: { analysis: FullAnalysis | 
       {!of || !vol ? (
         <div className="p-4 text-xs text-slate-500">Loading order flow…</div>
       ) : (
-        <div className="space-y-3 p-3">
+        <div className="h-full space-y-3 overflow-y-auto p-3">
           <div className="grid grid-cols-2 gap-2">
             <Gauge value={of.buyPressure} label="Buy pressure" tone="bull" />
             <Gauge value={of.sellPressure} label="Sell pressure" tone="bear" />

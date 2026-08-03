@@ -31,6 +31,8 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "volumeNumbers", label: "VOL#", title: "Print volume numbers under each bar" },
       { key: "deltaNumbers", label: "Δ#", title: "Print volume delta numbers under each bar" },
       { key: "liquidationDelta", label: "LIQΔ", title: "Aggregate liquidation delta per bar" },
+      { key: "liquidationCumulative", label: "ΣLIQΔ", title: "Cumulative aggregate liquidation delta — running forced-flow balance" },
+      { key: "pressure", label: "BUY%", title: "Buy-vs-sell pressure ribbon per bar" },
       { key: "cvd", label: "CVD", title: "Cumulative volume delta line" },
       { key: "orderFlowEvents", label: "ABS", title: "Absorption, exhaustion & trapped-trader markers" },
       { key: "bigTrades", label: "BIG", title: "Large-order bubbles" },
@@ -50,7 +52,15 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
 ];
 
 /** Symbol + timeframe + overlay controls for the chart header. */
-export default function MarketSelector({ connected, price }: { connected: boolean; price: number | null }) {
+export default function MarketSelector({
+  connected,
+  price,
+  countdown,
+}: {
+  connected: boolean;
+  price: number | null;
+  countdown?: string;
+}) {
   const { symbol, timeframe, setSymbol, setTimeframe, overlays, toggleOverlay } = useMarketStore();
   const market = MARKETS.find((m) => m.symbol === symbol);
   const [overlaysOpen, setOverlaysOpen] = useState(false);
@@ -79,6 +89,17 @@ export default function MarketSelector({ connected, price }: { connected: boolea
           className={`h-2 w-2 rounded-full ${connected ? "pulse-dot bg-bull" : "bg-bear"}`}
           title={connected ? "Live websocket connected" : "Reconnecting…"}
         />
+
+        {/* Always-visible candle countdown — independent of the socket. */}
+        {countdown && (
+          <span
+            className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 font-mono text-[11px] font-semibold tabular-nums text-neon-cyan"
+            title={`Time remaining until the current ${timeframe} candle closes`}
+          >
+            <span className="text-slate-500">⏱</span>
+            {countdown}
+          </span>
+        )}
 
         <div className="flex flex-wrap gap-0.5 rounded-lg bg-white/5 p-0.5" role="tablist" aria-label="Timeframe">
           {TIMEFRAMES.map((tf) => (
