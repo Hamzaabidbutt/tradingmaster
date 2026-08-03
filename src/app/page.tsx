@@ -10,8 +10,13 @@ import OrderFlowPanel from "@/components/panels/OrderFlowPanel";
 import LiquidationPanel from "@/components/panels/LiquidationPanel";
 import StructurePanel from "@/components/panels/StructurePanel";
 import LevelsPanel from "@/components/panels/LevelsPanel";
+import VolumeProfilePanel from "@/components/panels/VolumeProfilePanel";
+import FootprintPanel from "@/components/panels/FootprintPanel";
+import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
+import MultiWindowPanel from "@/components/panels/MultiWindowPanel";
 import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
+import { useCandleCountdown } from "@/hooks/useCandleCountdown";
 import { useMarketStore } from "@/stores/marketStore";
 import { MARKETS } from "@/lib/config";
 import { Candle } from "@/engines/types";
@@ -33,6 +38,7 @@ export default function TerminalPage() {
   const { analysis } = useAnalysis(symbol, timeframe);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const { formatted } = useCandleCountdown(timeframe, candles[candles.length - 1]?.time);
 
   // Historical candles for the chart (analysis polls separately server-side).
   useEffect(() => {
@@ -48,19 +54,42 @@ export default function TerminalPage() {
     };
     setCandles([]);
     load();
-    const t = setInterval(load, 30_000);
+    // Slow reconciliation only — the websocket is the live source of truth.
+    const t = setInterval(load, 60_000);
     return () => {
       stop = true;
       clearInterval(t);
     };
   }, [symbol, timeframe]);
 
+  // Fold finished websocket candles straight into local state so a new bar
+  // appears the instant it closes instead of waiting for the next poll.
+  useEffect(() => {
+    if (!kline?.closed) return;
+    setCandles((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (kline.time < last.time) return prev;
+      const bar: Candle = {
+        time: kline.time,
+        open: kline.open,
+        high: kline.high,
+        low: kline.low,
+        close: kline.close,
+        volume: kline.volume,
+        takerBuyVolume: kline.takerBuyVolume,
+      };
+      if (kline.time === last.time) return [...prev.slice(0, -1), bar];
+      return [...prev.slice(-499), bar];
+    });
+  }, [kline?.closed, kline?.time]);
+
   return (
     <AppShell>
-      <div className="grid h-full grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_340px] xl:grid-rows-[minmax(0,1.4fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
         {/* Chart cell */}
-        <div className="glass flex min-h-[420px] flex-col p-3 xl:min-h-0">
-          <MarketSelector connected={connected} price={price} />
+        <div className="glass flex h-[620px] flex-col p-3">
+          <MarketSelector connected={connected} price={price} countdown={formatted} />
           <div className="min-h-0 flex-1">
             <TradingChart
               candles={candles}
@@ -68,27 +97,49 @@ export default function TerminalPage() {
               analysis={analysis}
               overlays={overlays}
               pricePrecision={market?.pricePrecision ?? 4}
+              datasetKey={`${symbol}:${timeframe}`}
+              countdown={formatted}
+              livePrice={price}
             />
           </div>
         </div>
 
         {/* AI analyst — right rail, spans both rows on desktop */}
-        <div className="min-h-[420px] xl:row-span-2 xl:min-h-0">
+        <div className="h-[620px]">
           <AIInsightPanel analysis={analysis} />
         </div>
 
-        {/* Bottom intelligence row */}
-        <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-          <div className="min-h-[320px] 2xl:min-h-0"><SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} /></div>
-          <div className="min-h-[320px] 2xl:min-h-0"><OrderFlowPanel analysis={analysis} /></div>
-          <div className="min-h-[320px] 2xl:min-h-0"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
-          <div className="min-h-[320px] 2xl:min-h-0"><StructurePanel analysis={analysis} /></div>
+      </div>
+
+      {/* Conclusion row: 5-min pulse + multi-window read, side by side.
+          Fixed heights keep every panel's own body scrollable rather than
+          letting content overflow and get clipped. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="h-[640px]">
+          <SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
+        </div>
+        <div className="h-[640px]">
+          <MultiWindowPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
         </div>
       </div>
 
-      {/* Levels & patterns — full width below on smaller screens */}
+      {/* Core intelligence row */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-2 2xl:grid-cols-3">
+        <div className="h-[560px]"><OrderFlowPanel analysis={analysis} /></div>
+        <div className="h-[560px]"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
+        <div className="h-[560px]"><StructurePanel analysis={analysis} /></div>
+      </div>
+
+      {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 lg:grid-cols-3">
+        <div className="h-[600px]"><FootprintPanel analysis={analysis} /></div>
+        <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
+        <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>
+      </div>
+
+      {/* Levels & patterns */}
       <div className="p-3 pt-0">
-        <div className="max-h-[400px]">
+        <div className="h-[460px]">
           <LevelsPanel analysis={analysis} />
         </div>
       </div>

@@ -13,7 +13,7 @@ export default function StructurePanel({ analysis }: { analysis: FullAnalysis | 
       {!st || !analysis || !pd ? (
         <div className="p-4 text-xs text-slate-500">Mapping structure…</div>
       ) : (
-        <div className="space-y-3 p-3">
+        <div className="h-full space-y-3 overflow-y-auto p-3">
           <div className="flex flex-wrap items-center gap-2">
             <BiasBadge bias={st.trend} label={`External ${st.trend}`} />
             <BiasBadge bias={st.internalTrend} label={`Internal ${st.internalTrend}`} />

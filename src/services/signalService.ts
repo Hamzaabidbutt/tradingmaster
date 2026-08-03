@@ -6,7 +6,7 @@ import { analyzeMarket } from "@/engines/analyzer";
 import { STRATEGIES } from "@/engines/strategies";
 import { buildTradeRetrospective, computeWeightAdjustments } from "@/engines/learning";
 import { FullAnalysis, StrategyScore } from "@/engines/types";
-import { ENGINE_DEFAULTS, Timeframe } from "@/lib/config";
+import { ENGINE_DEFAULTS, FOOTPRINT_SOURCE, Timeframe } from "@/lib/config";
 
 /**
  * Signal lifecycle service: generation → persistence → evaluation → learning.
@@ -43,13 +43,37 @@ export async function ensureStrategyConfigs(): Promise<void> {
   }
 }
 
-/** Run full analysis with DB-backed adaptive weights. */
+/**
+ * Run full analysis with DB-backed adaptive weights.
+ *
+ * Also pulls a lower-timeframe series so the footprint engine can rebuild
+ * a genuine bid × ask ladder per candle instead of falling back to a
+ * modelled distribution. The sub-candle fetch is best-effort: if it fails
+ * the analysis still runs, just with `footprint.fidelity === "estimated"`.
+ */
 export async function analyzeSymbol(symbol: string, timeframe: Timeframe): Promise<FullAnalysis> {
-  const [candles, weights] = await Promise.all([
+  const subTf = FOOTPRINT_SOURCE[timeframe];
+  const [candles, weights, subCandles, minuteCandles] = await Promise.all([
     fetchKlines(symbol, timeframe, ENGINE_DEFAULTS.analysisLookback),
     getStrategyWeights(),
+    subTf
+      ? fetchKlines(symbol, subTf, 1000).catch((err) => {
+          logger.warn("signals.subcandles.unavailable", { symbol, subTf, error: String(err) });
+          return null;
+        })
+      : Promise.resolve(null),
+    // 1m series powers the Market Pulse window independently of the chart TF.
+    fetchKlines(symbol, "1m", 90).catch((err) => {
+      logger.warn("signals.minutecandles.unavailable", { symbol, error: String(err) });
+      return null;
+    }),
   ]);
-  return analyzeMarket(symbol, timeframe, candles, { weights });
+  return analyzeMarket(symbol, timeframe, candles, {
+    weights,
+    subCandles,
+    subTimeframe: subTf ?? undefined,
+    minuteCandles,
+  });
 }
 
 /**

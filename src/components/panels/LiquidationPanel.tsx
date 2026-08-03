@@ -20,7 +20,7 @@ export default function LiquidationPanel({
         <div className="p-4 text-xs text-slate-500">Loading liquidation analysis…</div>
       ) : (
         <div className="flex h-full flex-col">
-          <div className="space-y-3 p-3">
+          <div className="shrink-0 space-y-3 overflow-y-auto p-3">
             <div className="grid grid-cols-3 gap-2 text-center">
               <Meter label="Long pressure" value={liq.longLiquidationPressure} tone="bear" />
               <Meter label="Short pressure" value={liq.shortLiquidationPressure} tone="bull" />

@@ -208,6 +208,384 @@ export interface PremiumDiscount {
   positionInRange: number; // 0-1 where 1 = at range high
 }
 
+/* ------------------------------------------------------------------ *
+ * Volume Profile / Auction Theory
+ * ------------------------------------------------------------------ */
+
+export interface ProfileRow {
+  price: number;
+  volume: number;
+  buyVolume: number;
+  sellVolume: number;
+  delta: number;
+}
+
+/** High/Low Volume Nodes — prices the market accepted vs rejected. */
+export interface VolumeNode {
+  price: number;
+  priceHigh: number;
+  priceLow: number;
+  volume: number;
+  /** share of total profile volume, 0-1 */
+  share: number;
+  kind: "HVN" | "LVN";
+  note: string;
+}
+
+/**
+ * Auction-theory profile shape.
+ *  D = balanced (fair value accepted, range behaviour)
+ *  P = short covering / accumulation tail below (bearish if printed at a high)
+ *  b = long liquidation / distribution tail above (bullish if printed at a low)
+ *  B = double distribution (two separate value areas — trend transition)
+ */
+export type ProfileShape = "D" | "P" | "b" | "B";
+
+export interface VolumeProfileResult {
+  scope: "session" | "daily" | "weekly" | "visible";
+  rows: ProfileRow[];
+  poc: number;
+  vah: number;
+  val: number;
+  totalVolume: number;
+  /** value-area volume share actually captured (target 70%) */
+  valueAreaShare: number;
+  hvns: VolumeNode[];
+  lvns: VolumeNode[];
+  shape: ProfileShape;
+  /** where price currently trades relative to value */
+  acceptance: "above_value" | "inside_value" | "below_value";
+  /** auction state: balanced (inside value) vs imbalanced (seeking new value) */
+  auctionState: "balance" | "imbalance";
+  summary: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Footprint (bid × ask per price level)
+ * ------------------------------------------------------------------ */
+
+export interface FootprintCell {
+  price: number;
+  bidVolume: number; // sells hitting the bid (left column)
+  askVolume: number; // buys lifting the ask (right column)
+  delta: number;
+  /** diagonal imbalance vs the neighbouring price level */
+  imbalance: "buy" | "sell" | null;
+  imbalanceRatio: number;
+}
+
+export interface FootprintCandle {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  cells: FootprintCell[];
+  /** price level inside this candle with the most traded volume */
+  poc: number;
+  totalVolume: number;
+  delta: number;
+  /** 3+ consecutive imbalances in the same direction */
+  stackedImbalances: { direction: "buy" | "sell"; fromPrice: number; toPrice: number; count: number }[];
+  /** price levels where one side got no fills at all */
+  zeroPrints: { price: number; side: "buy" | "sell" }[];
+  /** delta sign disagrees with candle direction — the classic trap signature */
+  deltaDivergence: boolean;
+}
+
+export interface FootprintResult {
+  /** approximation quality: "real" when built from lower-timeframe candles */
+  fidelity: "sub_candle" | "estimated";
+  sourceTimeframe: string;
+  candles: FootprintCandle[];
+  imbalanceThreshold: number;
+  summary: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Absorption / Exhaustion / Trapped traders
+ * ------------------------------------------------------------------ */
+
+export interface AbsorptionEvent {
+  time: number;
+  price: number;
+  side: "buy" | "sell"; // side doing the absorbing (passive)
+  strength: number; // 0-100
+  volume: number;
+  delta: number;
+  /** absorption only matters at a key level — this names it */
+  atKeyLevel: string | null;
+  explanation: string;
+}
+
+export interface ExhaustionEvent {
+  time: number;
+  price: number;
+  side: "buy" | "sell"; // side running out of steam
+  stage: "momentum" | "weakening" | "danger";
+  volumeTrendPct: number; // negative = declining participation
+  strength: number;
+  explanation: string;
+}
+
+export interface TrappedTraders {
+  time: number;
+  price: number;
+  side: "buyers" | "sellers";
+  volume: number;
+  strength: number;
+  /** where their stops most likely sit */
+  stopZone: { low: number; high: number };
+  explanation: string;
+}
+
+export interface OrderFlowEvents {
+  absorptions: AbsorptionEvent[];
+  exhaustions: ExhaustionEvent[];
+  trapped: TrappedTraders[];
+  /** price levels that printed extreme delta — act as future S/R */
+  deltaSpikeLevels: { price: number; time: number; side: "buy" | "sell"; delta: number }[];
+  /** outsized single-bar prints (the "big trade bubbles") */
+  bigTrades: { time: number; price: number; side: "buy" | "sell"; volume: number; multiple: number }[];
+  summary: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Delta analytics
+ * ------------------------------------------------------------------ */
+
+export interface DeltaDivergence {
+  time: number;
+  kind: "regular_bearish" | "regular_bullish" | "hidden_bearish" | "hidden_bullish";
+  pricePoint: number;
+  priorPricePoint: number;
+  cvdPoint: number;
+  priorCvdPoint: number;
+  strength: number;
+  explanation: string;
+}
+
+export interface DeltaAnalysis {
+  /** per-bar delta with running CVD */
+  series: { time: number; delta: number; cvd: number; price: number }[];
+  cvd: number;
+  cvdTrend: Bias;
+  divergences: DeltaDivergence[];
+  /** bars whose delta sign contradicts the candle body */
+  trapBars: { time: number; price: number; candleDirection: Bias; deltaDirection: Bias; delta: number }[];
+  maxDelta: number;
+  minDelta: number;
+  summary: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Classic indicators (MAs, VWAP, Fibonacci)
+ * ------------------------------------------------------------------ */
+
+export interface MovingAverage {
+  key: string;
+  label: string;
+  type: "EMA" | "SMA";
+  period: number;
+  color: string;
+  values: { time: number; value: number }[];
+  current: number;
+  /** price above/below this MA */
+  position: "above" | "below";
+}
+
+export interface MovingAverageResult {
+  averages: MovingAverage[];
+  /** fast/slow alignment across the stack */
+  alignment: Bias;
+  goldenCross: boolean;
+  deathCross: boolean;
+  summary: string[];
+}
+
+export interface VwapResult {
+  values: { time: number; value: number }[];
+  current: number;
+  upperBand1: number;
+  lowerBand1: number;
+  upperBand2: number;
+  lowerBand2: number;
+  bands: { time: number; upper1: number; lower1: number; upper2: number; lower2: number }[];
+  position: "above" | "below";
+  distancePct: number;
+  summary: string[];
+}
+
+export interface FibLevel {
+  ratio: number;
+  label: string;
+  price: number;
+  kind: "retracement" | "extension";
+  /** golden pocket 0.618–0.65 */
+  isGoldenPocket: boolean;
+}
+
+export interface FibonacciResult {
+  direction: "up" | "down";
+  swingHigh: number;
+  swingLow: number;
+  swingHighTime: number;
+  swingLowTime: number;
+  levels: FibLevel[];
+  /** the retracement level price is currently reacting to, if any */
+  activeLevel: FibLevel | null;
+  summary: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Equal highs / lows drawn as connecting lines
+ * ------------------------------------------------------------------ */
+
+export interface EqualLevelLine {
+  id: string;
+  kind: "EQH" | "EQL";
+  price: number;
+  startTime: number;
+  endTime: number;
+  touches: number;
+  swept: boolean;
+  strength: number;
+  note: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Aggregate liquidation delta
+ * ------------------------------------------------------------------ */
+
+export interface LiquidationDeltaPoint {
+  time: number;
+  longLiquidated: number;
+  shortLiquidated: number;
+  /** shortLiquidated - longLiquidated (positive = shorts getting squeezed) */
+  delta: number;
+  cumulative: number;
+}
+
+export interface LiquidationDeltaResult {
+  series: LiquidationDeltaPoint[];
+  netDelta: number;
+  cumulative: number;
+  dominantSide: "long" | "short" | "balanced";
+  summary: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Market Pulse — recent-window conclusion
+ * ------------------------------------------------------------------ */
+
+export interface RecentWindowSummary {
+  windowMinutes: number;
+  from: number;
+  to: number;
+  priceStart: number;
+  priceEnd: number;
+  changePct: number;
+  high: number;
+  low: number;
+  totalVolume: number;
+  buyVolume: number;
+  sellVolume: number;
+  delta: number;
+  buyPct: number;
+  volumeMultiple: number;
+  rangeMultiple: number;
+  volumeTrendPct: number;
+  /** where business actually got done in the window */
+  mostTradedPrices: { price: number; volume: number; share: number; buyShare: number }[];
+  poc: number;
+  /** candles that closed against their own delta — absorbed aggression */
+  absorptionCandles: {
+    time: number;
+    type: "bearish_positive_delta" | "bullish_negative_delta";
+    open: number;
+    close: number;
+    delta: number;
+    volume: number;
+    volumeMultiple: number;
+    note: string;
+  }[];
+  /** the price band that soaked up the bulk of the volume */
+  institutionalZones: {
+    priceLow: number;
+    priceHigh: number;
+    volume: number;
+    share: number;
+    side: "accumulation" | "distribution" | "neutral";
+    note: string;
+  }[];
+  bigTrades: { time: number; price: number; side: "buy" | "sell"; volume: number; multiple: number }[];
+  sweeps: { time: number; price: number; direction: "above" | "below"; note: string }[];
+  /** transparent breakdown of what produced the odds */
+  factors: { label: string; points: number; detail: string }[];
+  bullishOdds: number;
+  bearishOdds: number;
+  nextMove: {
+    direction: Bias;
+    target: number;
+    invalidation: number;
+    rationale: string[];
+  };
+  verdict: string;
+  keyTakeaways: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Multi-window lookback insights
+ * ------------------------------------------------------------------ */
+
+export interface WindowInsight {
+  /** number of candles this read covers */
+  bars: number;
+  from: number;
+  to: number;
+  priceStart: number;
+  priceEnd: number;
+  changePct: number;
+  high: number;
+  low: number;
+  poc: number;
+  totalVolume: number;
+  buyVolume: number;
+  sellVolume: number;
+  delta: number;
+  buyPct: number;
+  volumeMultiple: number;
+  rangeMultiple: number;
+  volumeTrendPct: number;
+  bullishCandles: number;
+  bearishCandles: number;
+  /** bars that closed against their own delta */
+  absorptionCount: number;
+  /** where the window closed inside its range, 0 = low, 1 = high */
+  closePosition: number;
+  bias: Bias;
+  bullishOdds: number;
+  headline: string;
+  detail: string;
+}
+
+export interface MultiWindowResult {
+  windows: WindowInsight[];
+  consensus: {
+    bias: Bias;
+    /** % of windows agreeing with the majority */
+    agreement: number;
+    bullishCount: number;
+    bearishCount: number;
+    neutralCount: number;
+    shortTermBias: Bias;
+    longTermBias: Bias;
+    /** short horizons disagreeing with long ones — an early-turn tell */
+    diverging: boolean;
+    summary: string[];
+  };
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -251,6 +629,18 @@ export interface FullAnalysis {
   orderFlow: OrderFlowResult;
   liquidations: LiquidationAnalysis;
   doublePatterns: DoublePattern[];
+  volumeProfile: VolumeProfileResult;
+  footprint: FootprintResult;
+  orderFlowEvents: OrderFlowEvents;
+  delta: DeltaAnalysis;
+  movingAverages: MovingAverageResult;
+  vwap: VwapResult;
+  fibonacci: FibonacciResult;
+  equalLevels: EqualLevelLine[];
+  liquidationDelta: LiquidationDeltaResult;
+  /** null when 1-minute candles were unavailable */
+  pulse: RecentWindowSummary | null;
+  multiWindow: MultiWindowResult;
   bias: Bias;
   bullishProbability: number;
   bearishProbability: number;

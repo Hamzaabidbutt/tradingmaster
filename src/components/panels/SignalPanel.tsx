@@ -3,17 +3,77 @@
 import { useState } from "react";
 import { FullAnalysis } from "@/engines/types";
 import { GlassCard } from "@/components/ui/primitives";
+import MarketPulse from "./MarketPulse";
 
-/** Active trade setup with full reasoning + invalidation conditions. */
+/**
+ * Signal panel with two views:
+ *  • Setup — the active trade setup with reasoning and invalidation
+ *  • 5-Min Pulse — a complete conclusion of the last five minutes with
+ *    directional odds, most traded prices, absorbed aggression and the
+ *    institutional footprint band
+ */
 export default function SignalPanel({ analysis, pricePrecision }: { analysis: FullAnalysis | null; pricePrecision: number }) {
   const [tab, setTab] = useState<"reasoning" | "invalidation" | "strategies">("reasoning");
+  const [view, setView] = useState<"setup" | "pulse">("pulse");
   const setup = analysis?.setup;
 
   const fmt = (v: number) => v.toFixed(pricePrecision);
 
+  const pulseOdds = analysis?.pulse
+    ? Math.max(analysis.pulse.bullishOdds, analysis.pulse.bearishOdds)
+    : null;
+
   return (
-    <GlassCard title="Signal Engine" className="h-full">
-      {!setup ? (
+    <GlassCard
+      title={
+        <div className="flex w-full items-center gap-1">
+          {(
+            [
+              ["pulse", "5-Min Pulse"],
+              ["setup", "Setup"],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setView(k)}
+              aria-pressed={view === k}
+              className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                view === k ? "bg-neon-cyan/15 text-neon-cyan" : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {label}
+              {k === "pulse" && pulseOdds != null && (
+                <span
+                  className={`ml-1.5 font-mono ${
+                    analysis!.pulse!.bullishOdds >= analysis!.pulse!.bearishOdds ? "text-bull" : "text-bear"
+                  }`}
+                >
+                  {pulseOdds}%
+                </span>
+              )}
+              {k === "setup" && setup && (
+                <span className={`ml-1.5 font-mono ${setup.side === "BUY" ? "text-bull" : "text-bear"}`}>
+                  {setup.side}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      }
+      className="h-full"
+    >
+      {view === "pulse" ? (
+        <MarketPulse pulse={analysis?.pulse ?? null} pricePrecision={pricePrecision} />
+      ) : (
+        <SetupView />
+      )}
+    </GlassCard>
+  );
+
+  function SetupView() {
+    return (
+      <>
+        {!setup ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
           <span className="text-2xl">🎯</span>
           <p className="text-xs text-slate-400">
@@ -109,9 +169,10 @@ export default function SignalPanel({ analysis, pricePrecision }: { analysis: Fu
             )}
           </div>
         </div>
-      )}
-    </GlassCard>
-  );
+        )}
+      </>
+    );
+  }
 }
 
 function formatDuration(min: number): string {

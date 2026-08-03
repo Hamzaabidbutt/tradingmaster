@@ -1,5 +1,6 @@
 import { Timeframe, TIMEFRAME_MINUTES } from "@/lib/config";
 import { analyzeMarket } from "./analyzer";
+import { STRATEGIES } from "./strategies";
 import { BacktestMetrics, BacktestTrade, Candle } from "./types";
 
 export interface BacktestOptions {
@@ -108,11 +109,8 @@ export function runBacktest(
   return computeMetrics(symbol, timeframe, opts.strategyKey, trades);
 }
 
-const ALL_KEYS = [
-  "smc", "ict", "liquidity_sweep", "order_block", "fvg", "breakout",
-  "volume_expansion", "trend_continuation", "reversal", "choch", "bos",
-  "engulfing", "support_resistance", "delta", "absorption", "liquidation_fade",
-];
+/** Derived from the strategy registry so isolation can never drift out of sync. */
+const ALL_KEYS = STRATEGIES.map((s) => s.key);
 
 export function computeMetrics(
   symbol: string,
