@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Candle } from "@/engines/types";
+import { fetchTickersDirect } from "@/lib/marketClient";
 
 const WS_BASE = "wss://fstream.binance.com";
 
@@ -107,18 +108,38 @@ export interface TickerRow {
   quoteVolume: number;
 }
 
-/** All-market mini tickers for the live market feed strip. */
+/**
+ * All-market mini tickers for the live market feed strip.
+ *
+ * Falls back to fetching Binance directly from the browser when the server
+ * route fails — a server deployed in a Binance-blocked region returns 451,
+ * which would otherwise leave the strip stuck on "Connecting…" forever.
+ */
 export function useTickers(intervalMs = 10000) {
   const [tickers, setTickers] = useState<TickerRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     let stop = false;
     const load = async () => {
       try {
         const res = await fetch("/api/market/ticker", { cache: "no-store" });
         const data = await res.json();
-        if (!stop && data.tickers) setTickers(data.tickers);
-      } catch {
-        /* transient */
+        if (!res.ok || !data.tickers?.length) throw new Error(data.error ?? `HTTP ${res.status}`);
+        if (!stop) {
+          setTickers(data.tickers);
+          setError(null);
+        }
+      } catch (serverErr) {
+        try {
+          const direct = await fetchTickersDirect();
+          if (!stop && direct.length > 0) {
+            setTickers(direct);
+            setError(null);
+          }
+        } catch {
+          if (!stop) setError(String(serverErr));
+        }
       }
     };
     load();
@@ -128,5 +149,6 @@ export function useTickers(intervalMs = 10000) {
       clearInterval(t);
     };
   }, [intervalMs]);
-  return tickers;
+
+  return { tickers, error };
 }

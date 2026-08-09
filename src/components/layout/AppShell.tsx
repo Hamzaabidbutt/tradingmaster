@@ -20,7 +20,7 @@ const NAV = [
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { sidebarCollapsed, toggleSidebar } = useMarketStore();
-  const tickers = useTickers();
+  const { tickers, error: tickerError } = useTickers();
   const [user, setUser] = useState<{ email: string; role: string } | null>(null);
 
   useEffect(() => {
@@ -100,7 +100,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               </div>
             );
           })}
-          {tickers.length === 0 && <span className="text-xs text-slate-600">Connecting to market feed…</span>}
+          {tickers.length === 0 && (
+            <span className={`text-xs ${tickerError ? "text-bear" : "text-slate-600"}`}>
+              {tickerError
+                ? `Market feed unavailable — ${tickerError}`
+                : "Connecting to market feed…"}
+            </span>
+          )}
         </div>
 
         <main className="min-h-0 flex-1 overflow-y-auto pb-16 md:pb-0">{children}</main>

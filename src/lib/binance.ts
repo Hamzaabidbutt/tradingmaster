@@ -30,8 +30,13 @@ export async function fetchKlines(
   const url = `${FAPI}/fapi/v1/klines?${params.toString()}`;
   const res = await fetch(url, { next: { revalidate: 0 }, cache: "no-store" });
   if (!res.ok) {
-    logger.error("binance.klines.failed", { symbol, interval, status: res.status });
-    throw new Error(`Binance klines request failed: ${res.status}`);
+    const detail = await res.text().catch(() => "");
+    logger.error("binance.klines.failed", { symbol, interval, status: res.status, detail: detail.slice(0, 200) });
+    throw new Error(
+      res.status === 451 || res.status === 403
+        ? `Binance blocked this server (HTTP ${res.status}). The deployment region is geo-restricted — move it to a permitted region (see vercel.json) or set BINANCE_FAPI_BASE to a reachable mirror.`
+        : `Binance klines request failed: ${res.status}`
+    );
   }
   const raw = (await res.json()) as RawKline[];
 
@@ -88,7 +93,13 @@ export async function fetchTicker(symbol: string): Promise<TickerSnapshot> {
   const res = await fetch(`${FAPI}/fapi/v1/ticker/24hr?symbol=${symbol}`, {
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Binance ticker request failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(
+      res.status === 451 || res.status === 403
+        ? `Binance blocked this server (HTTP ${res.status}) — the deployment region is geo-restricted.`
+        : `Binance ticker request failed: ${res.status}`
+    );
+  }
   const t = await res.json();
   const snap: TickerSnapshot = {
     symbol,

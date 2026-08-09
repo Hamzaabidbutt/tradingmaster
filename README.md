@@ -91,8 +91,18 @@ npm test                      # engine test suite
 The dashboard works without a database (analysis is computed live); MySQL enables signal
 persistence, learning, analytics and auth. The first registered account becomes **ADMIN**.
 
-> Binance's public API must be reachable from the server. Some cloud/CI egress policies block
-> `fapi.binance.com` — set `BINANCE_FAPI_BASE` to a compatible mirror/proxy if needed.
+> **Binance geo-blocking (important for cloud deploys).** Binance returns HTTP **451** to a number of
+> datacentre regions, notably US ones. Vercel's default function region is `iad1` (US East), so a
+> default deploy will show an empty chart and a stuck "Connecting to market feed…" strip while the
+> browser's own websocket connects fine.
+>
+> This repo ships a `vercel.json` pinning functions to `fra1` (Frankfurt). Other permitted regions
+> include `sin1`, `hnd1` and `syd1`. On other hosts, deploy outside the US or point
+> `BINANCE_FAPI_BASE` at a reachable mirror/proxy.
+>
+> As a safety net the UI falls back to fetching klines and tickers **directly from the visitor's
+> browser** when the server route fails, and shows a banner saying so. That keeps the chart alive,
+> but the server-side analysis panels still require a server that can reach Binance.
 
 ## Honest-accuracy policy
 
