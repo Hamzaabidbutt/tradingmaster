@@ -20,6 +20,7 @@ import { useCandleCountdown } from "@/hooks/useCandleCountdown";
 import { useMarketStore } from "@/stores/marketStore";
 import { MARKETS } from "@/lib/config";
 import { Candle } from "@/engines/types";
+import { fetchKlinesDirect } from "@/lib/marketClient";
 
 const TradingChart = dynamic(() => import("@/components/chart/TradingChart"), {
   ssr: false,
@@ -39,6 +40,9 @@ export default function TerminalPage() {
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
   const [candles, setCandles] = useState<Candle[]>([]);
   const { formatted } = useCandleCountdown(timeframe, candles[candles.length - 1]?.time);
+  /** Where chart candles came from — surfaced so a degraded feed is visible. */
+  const [dataSource, setDataSource] = useState<"server" | "browser" | "failed" | null>(null);
+  const [feedError, setFeedError] = useState<string | null>(null);
 
   // Historical candles for the chart (analysis polls separately server-side).
   useEffect(() => {
@@ -47,12 +51,33 @@ export default function TerminalPage() {
       try {
         const res = await fetch(`/api/market/klines?symbol=${symbol}&timeframe=${timeframe}&limit=400`, { cache: "no-store" });
         const data = await res.json();
-        if (!stop && data.candles) setCandles(data.candles);
-      } catch {
-        /* transient */
+        if (!res.ok || !data.candles?.length) throw new Error(data.error ?? `HTTP ${res.status}`);
+        if (!stop) {
+          setCandles(data.candles);
+          setDataSource("server");
+        }
+      } catch (serverErr) {
+        // The server may be geo-blocked by Binance (US regions get HTTP
+        // 451) even though the visitor's own connection is fine — fall
+        // back to fetching directly from the browser.
+        try {
+          const direct = await fetchKlinesDirect(symbol, timeframe, 400);
+          if (!stop && direct.length > 0) {
+            setCandles(direct);
+            setDataSource("browser");
+          }
+        } catch (directErr) {
+          if (!stop) {
+            setDataSource("failed");
+            setFeedError(
+              `Market data unavailable. Server said: ${String(serverErr)}. Direct browser fetch said: ${String(directErr)}.`
+            );
+          }
+        }
       }
     };
     setCandles([]);
+    setFeedError(null);
     load();
     // Slow reconciliation only — the websocket is the live source of truth.
     const t = setInterval(load, 60_000);
@@ -90,6 +115,18 @@ export default function TerminalPage() {
         {/* Chart cell */}
         <div className="glass flex h-[620px] flex-col p-3">
           <MarketSelector connected={connected} price={price} countdown={formatted} />
+          {dataSource === "browser" && (
+            <div className="mb-2 rounded-lg border border-neon-amber/30 bg-neon-amber/5 px-3 py-1.5 text-[10px] leading-relaxed text-neon-amber">
+              Server could not reach Binance (it is likely deployed in a geo-blocked region) — chart data is being
+              fetched directly from your browser instead. Server-side analysis panels will stay empty until the
+              deployment region is changed.
+            </div>
+          )}
+          {dataSource === "failed" && feedError && (
+            <div className="mb-2 rounded-lg border border-bear/30 bg-bear/5 px-3 py-1.5 text-[10px] leading-relaxed text-bear">
+              {feedError}
+            </div>
+          )}
           <div className="min-h-0 flex-1">
             <TradingChart
               candles={candles}

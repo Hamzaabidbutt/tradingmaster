@@ -16,6 +16,9 @@ export async function GET(req: NextRequest) {
     const candles = await fetchKlines(symbol, tf, limit);
     return NextResponse.json({ symbol, timeframe: tf, candles });
   } catch (err) {
-    return NextResponse.json({ error: "Upstream market data unavailable" }, { status: 502 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Upstream market data unavailable" },
+      { status: 502 }
+    );
   }
 }

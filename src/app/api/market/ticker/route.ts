@@ -13,7 +13,10 @@ export async function GET(req: NextRequest) {
     }
     const all = await Promise.all(MARKETS.map((m) => fetchTicker(m.symbol).catch(() => null)));
     return NextResponse.json({ tickers: all.filter(Boolean) });
-  } catch {
-    return NextResponse.json({ error: "Upstream market data unavailable" }, { status: 502 });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Upstream market data unavailable" },
+      { status: 502 }
+    );
   }
 }
