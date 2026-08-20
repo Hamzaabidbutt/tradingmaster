@@ -2,24 +2,48 @@
 
 import { RecentWindowSummary } from "@/engines/types";
 import { ProbabilityBar, timeAgo } from "@/components/ui/primitives";
+import { PulseWindow } from "@/stores/marketStore";
+
+/** Windows the user can conclude over. Anything longer stops being "recent". */
+const WINDOWS: { value: PulseWindow; label: string }[] = [
+  { value: 5, label: "5m" },
+  { value: 15, label: "15m" },
+  { value: 60, label: "1h" },
+];
 
 /**
- * The "what just happened" view: a complete conclusion of the last few
- * minutes — most traded prices, absorbed aggression (bearish candles that
+ * The "what just happened" view: a complete conclusion of the last stretch of
+ * trading — most traded prices, absorbed aggression (bearish candles that
  * closed with positive delta and vice versa), the institutional footprint
  * band, and an explicit directional read with transparent odds.
+ *
+ * The window defaults to an hour: five minutes of tape is mostly noise, and
+ * an hour reads sentiment far more steadily. The toggle is there for when you
+ * genuinely want the short view.
  */
 export default function MarketPulse({
   pulse,
   pricePrecision,
+  windowMinutes,
+  onWindowChange,
 }: {
   pulse: RecentWindowSummary | null;
   pricePrecision: number;
+  windowMinutes?: PulseWindow;
+  onWindowChange?: (w: PulseWindow) => void;
 }) {
+  const toggle =
+    windowMinutes && onWindowChange ? (
+      <WindowToggle value={windowMinutes} onChange={onWindowChange} />
+    ) : null;
+
   if (!pulse) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-xs text-slate-500">
-        Waiting for minute data to build the recent-window conclusion…
+      <div className="flex h-full flex-col">
+        {toggle && <div className="flex justify-end border-b border-white/5 px-3 py-2">{toggle}</div>}
+        <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-slate-500">
+          Waiting for minute data to build the recent-window conclusion…
+        </div>
       </div>
     );
   }
@@ -37,15 +61,27 @@ export default function MarketPulse({
           dir === "bullish" ? "bg-bull/5" : dir === "bearish" ? "bg-bear/5" : "bg-white/[0.02]"
         }`}
       >
-        <div className="mb-2 flex items-center justify-between">
+        <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
             Last {pulse.windowMinutes} minutes · {timeAgo(pulse.to)}
           </span>
-          <span className={`font-mono text-sm font-bold ${pulse.changePct >= 0 ? "text-bull" : "text-bear"}`}>
-            {pulse.changePct >= 0 ? "+" : ""}
-            {pulse.changePct.toFixed(2)}%
-          </span>
+          <div className="flex items-center gap-2">
+            {pulse.baselineDegraded && (
+              <span
+                className="rounded-full border border-neon-amber/40 bg-neon-amber/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-neon-amber"
+                title={`Only ${pulse.baselineMinutes}m of history was available, so "normal" volume and range are measured against a span barely wider than the window itself. Volume and range multiples are less meaningful than usual.`}
+              >
+                ⚠ thin baseline
+              </span>
+            )}
+            <span className={`font-mono text-sm font-bold ${pulse.changePct >= 0 ? "text-bull" : "text-bear"}`}>
+              {pulse.changePct >= 0 ? "+" : ""}
+              {pulse.changePct.toFixed(2)}%
+            </span>
+          </div>
         </div>
+
+        {toggle && <div className="mb-2 flex justify-start">{toggle}</div>}
 
         <ProbabilityBar bullish={pulse.bullishOdds} />
 
@@ -140,7 +176,11 @@ export default function MarketPulse({
         {/* ---- Absorbed aggression ---- */}
         <Section
           title="Absorbed aggression"
-          hint="candles that closed against their own delta"
+          hint={
+            pulse.absorptionTotalCount > pulse.absorptionCandles.length
+              ? `strongest ${pulse.absorptionCandles.length} of ${pulse.absorptionTotalCount}`
+              : "candles that closed against their own delta"
+          }
         >
           {pulse.absorptionCandles.length === 0 ? (
             <p className="text-[10px] text-slate-500">
@@ -200,13 +240,24 @@ export default function MarketPulse({
               value={`${pulse.volumeTrendPct >= 0 ? "+" : ""}${pulse.volumeTrendPct.toFixed(0)}%`}
               tone={pulse.volumeTrendPct < -25 ? "bear" : "slate"}
             />
-            <Stat label="Large prints" value={String(pulse.bigTrades.length)} tone={pulse.bigTrades.length > 0 ? "amber" : "slate"} />
+            <Stat
+              label="Large prints"
+              value={String(pulse.bigTradesTotalCount)}
+              tone={pulse.bigTradesTotalCount > 0 ? "amber" : "slate"}
+            />
           </div>
         </Section>
 
         {/* ---- Stop hunts ---- */}
         {pulse.sweeps.length > 0 && (
-          <Section title="Stop hunts" hint="liquidity taken in this window">
+          <Section
+            title="Stop hunts"
+            hint={
+              pulse.sweepsTotalCount > 3
+                ? `latest 3 of ${pulse.sweepsTotalCount} in this window`
+                : "liquidity taken in this window"
+            }
+          >
             <div className="space-y-1">
               {pulse.sweeps.slice(-3).reverse().map((s, i) => (
                 <p key={i} className="text-[10px] leading-relaxed text-neon-amber">
@@ -253,6 +304,38 @@ export default function MarketPulse({
           </ul>
         </Section>
       </div>
+    </div>
+  );
+}
+
+function WindowToggle({
+  value,
+  onChange,
+}: {
+  value: PulseWindow;
+  onChange: (w: PulseWindow) => void;
+}) {
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded-md border border-white/10 bg-white/[0.03]"
+      role="group"
+      aria-label="Pulse window"
+    >
+      {WINDOWS.map((w) => (
+        <button
+          key={w.value}
+          onClick={() => onChange(w.value)}
+          aria-pressed={value === w.value}
+          title={`Conclude over the last ${w.label}`}
+          className={`px-2 py-0.5 font-mono text-[10px] font-bold transition-colors ${
+            value === w.value
+              ? "bg-neon-cyan/15 text-neon-cyan"
+              : "text-slate-500 hover:bg-white/5 hover:text-slate-300"
+          }`}
+        >
+          {w.label}
+        </button>
+      ))}
     </div>
   );
 }

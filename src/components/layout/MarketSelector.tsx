@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { MARKETS, TIMEFRAMES } from "@/lib/config";
+import { TIMEFRAMES } from "@/lib/config";
 import { OverlayToggles, useMarketStore } from "@/stores/marketStore";
+import { useSymbols } from "@/hooks/useSymbols";
+import SymbolSearch from "./SymbolSearch";
 
 /** Overlay toggles grouped so the control strip stays readable. */
 const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label: string; title: string }[] }[] = [
@@ -62,28 +64,17 @@ export default function MarketSelector({
   countdown?: string;
 }) {
   const { symbol, timeframe, setSymbol, setTimeframe, overlays, toggleOverlay } = useMarketStore();
-  const market = MARKETS.find((m) => m.symbol === symbol);
+  const { precisionFor } = useSymbols();
   const [overlaysOpen, setOverlaysOpen] = useState(false);
   const activeCount = Object.values(overlays).filter(Boolean).length;
 
   return (
     <div className="space-y-2 px-1 pb-2">
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          className="rounded-lg border border-white/10 bg-base-800 px-2.5 py-1.5 font-mono text-sm font-semibold text-slate-100 outline-none focus:border-neon-cyan/50"
-          aria-label="Trading pair"
-        >
-          {MARKETS.map((m) => (
-            <option key={m.symbol} value={m.symbol}>{m.label}</option>
-          ))}
-        </select>
+        <SymbolSearch symbol={symbol} onSelect={setSymbol} />
 
         {price != null && (
-          <span className="font-mono text-lg font-bold text-slate-100">
-            {price.toFixed(market?.pricePrecision ?? 4)}
-          </span>
+          <span className="font-mono text-lg font-bold text-slate-100">{price.toFixed(precisionFor(symbol))}</span>
         )}
         <span
           className={`h-2 w-2 rounded-full ${connected ? "pulse-dot bg-bull" : "bg-bear"}`}

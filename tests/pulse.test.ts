@@ -95,6 +95,65 @@ describe("market pulse engine", () => {
   });
 });
 
+describe("market pulse — hour-long window", () => {
+  it("defaults to a 60-minute window", () => {
+    const p = buildPulse(syntheticCandles(400))!;
+    expect(p.windowMinutes).toBe(60);
+  });
+
+  it("keeps the baseline strictly wider than the window", () => {
+    // 60m window wants a 240m baseline; 400 bars is enough to give it one.
+    const p = buildPulse(syntheticCandles(400), { windowMinutes: 60 })!;
+    expect(p.baselineMinutes).toBe(240);
+    expect(p.baselineMinutes).toBeGreaterThan(p.windowMinutes);
+    expect(p.baselineDegraded).toBe(false);
+  });
+
+  it("does not pin volumeMultiple to 1.0 the way a self-referential baseline would", () => {
+    // Quiet hours, then a genuinely busy final hour. Measured against itself
+    // this would read 1.00x; measured against the wider baseline it must not.
+    const quiet = Array.from({ length: 240 }, (_, i) =>
+      candle(1000 + i * 60, 100, 100.2, 99.8, 100, 1000, 500)
+    );
+    const busy = Array.from({ length: 60 }, (_, i) =>
+      candle(1000 + (240 + i) * 60, 100, 100.6, 99.4, 100.1, 4000, 2200)
+    );
+    const p = buildPulse([...quiet, ...busy], { windowMinutes: 60 })!;
+    expect(p.volumeMultiple).toBeGreaterThan(1.5);
+    expect(p.rangeMultiple).toBeGreaterThan(1.5);
+  });
+
+  it("flags a degraded baseline when history is too short to define normal", () => {
+    // 70 bars cannot support a 240m baseline behind a 60m window.
+    const p = buildPulse(syntheticCandles(70), { windowMinutes: 60 })!;
+    expect(p.baselineDegraded).toBe(true);
+    expect(p.baselineMinutes).toBeLessThan(p.windowMinutes * 2);
+  });
+
+  it("caps display lists but preserves the true counts", () => {
+    // Every bar closes red on positive delta => 60 absorption candidates.
+    const bars = Array.from({ length: 300 }, (_, i) =>
+      candle(1000 + i * 60, 100, 100.4, 99.6, 99.9, 1200, 900)
+    );
+    const p = buildPulse(bars, { windowMinutes: 60 })!;
+    expect(p.absorptionTotalCount).toBeGreaterThan(p.absorptionCandles.length);
+    expect(p.absorptionCandles.length).toBeLessThanOrEqual(12);
+    expect(p.bigTrades.length).toBeLessThanOrEqual(12);
+    expect(p.bigTradesTotalCount).toBeGreaterThanOrEqual(p.bigTrades.length);
+    expect(p.sweeps.length).toBeLessThanOrEqual(10);
+    expect(p.sweepsTotalCount).toBeGreaterThanOrEqual(p.sweeps.length);
+  });
+
+  it("still produces complementary odds and a verdict over an hour", () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const p = buildPulse(syntheticCandles(400, seed), { windowMinutes: 60 })!;
+      expect(p.bullishOdds + p.bearishOdds).toBe(100);
+      expect(p.verdict.length).toBeGreaterThan(30);
+      expect(p.keyTakeaways.length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("candle countdown formatting", () => {
   it("formats mm:ss under an hour", () => {
     expect(formatCountdown(0)).toBe("00:00");

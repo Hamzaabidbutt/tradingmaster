@@ -3,7 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { fetchKlinesPaged } from "@/lib/binance";
 import { runBacktest } from "@/engines/backtest";
-import { isValidSymbol, isValidTimeframe, Timeframe } from "@/lib/config";
+import { isValidTimeframe, Timeframe } from "@/lib/config";
+import { isTradableSymbol } from "@/lib/symbols";
 import { rateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 
@@ -40,8 +41,9 @@ export async function POST(req: NextRequest) {
   const parsed = runSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid input", details: parsed.error.flatten() }, { status: 400 });
   const { symbol, timeframe, strategyKey, bars, minConfidence } = parsed.data;
-  if (!isValidSymbol(symbol)) return NextResponse.json({ error: "Unknown symbol" }, { status: 400 });
   if (!isValidTimeframe(timeframe)) return NextResponse.json({ error: "Unknown timeframe" }, { status: 400 });
+  if (!(await isTradableSymbol(symbol)))
+    return NextResponse.json({ error: "Unknown symbol" }, { status: 400 });
 
   try {
     const candles = await fetchKlinesPaged(symbol, timeframe, bars);

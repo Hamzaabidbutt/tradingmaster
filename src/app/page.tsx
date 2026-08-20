@@ -14,11 +14,14 @@ import VolumeProfilePanel from "@/components/panels/VolumeProfilePanel";
 import FootprintPanel from "@/components/panels/FootprintPanel";
 import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
 import MultiWindowPanel from "@/components/panels/MultiWindowPanel";
+import ChartAnalystPanel from "@/components/panels/ChartAnalystPanel";
+import CandleCloseExpansionPanel from "@/components/panels/CandleCloseExpansionPanel";
+import RangeTradingPanel from "@/components/panels/RangeTradingPanel";
 import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
 import { useCandleCountdown } from "@/hooks/useCandleCountdown";
+import { useSymbols } from "@/hooks/useSymbols";
 import { useMarketStore } from "@/stores/marketStore";
-import { MARKETS } from "@/lib/config";
 import { Candle } from "@/engines/types";
 import { fetchKlinesDirect } from "@/lib/marketClient";
 
@@ -34,9 +37,10 @@ const TradingChart = dynamic(() => import("@/components/chart/TradingChart"), {
  * signal engine, order flow, liquidations, structure and key levels.
  */
 export default function TerminalPage() {
-  const { symbol, timeframe, overlays } = useMarketStore();
-  const market = MARKETS.find((m) => m.symbol === symbol);
-  const { analysis } = useAnalysis(symbol, timeframe);
+  const { symbol, timeframe, overlays, pulseWindowMinutes } = useMarketStore();
+  const { precisionFor } = useSymbols();
+  const pricePrecision = precisionFor(symbol);
+  const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
   const [candles, setCandles] = useState<Candle[]>([]);
   const { formatted } = useCandleCountdown(timeframe, candles[candles.length - 1]?.time);
@@ -133,7 +137,7 @@ export default function TerminalPage() {
               liveKline={kline}
               analysis={analysis}
               overlays={overlays}
-              pricePrecision={market?.pricePrecision ?? 4}
+              pricePrecision={pricePrecision}
               datasetKey={`${symbol}:${timeframe}`}
               countdown={formatted}
               livePrice={price}
@@ -148,16 +152,26 @@ export default function TerminalPage() {
 
       </div>
 
-      {/* Conclusion row: 5-min pulse + multi-window read, side by side.
-          Fixed heights keep every panel's own body scrollable rather than
-          letting content overflow and get clipped. */}
+      {/* Conclusion row: recent-window pulse + multi-window read, side by side.
+          The pulse window itself is user-selectable (1h by default) — see
+          MarketPulse. Fixed heights keep every panel's own body scrollable
+          rather than letting content overflow and get clipped. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="h-[640px]">
-          <SignalPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
+          <SignalPanel analysis={analysis} pricePrecision={pricePrecision} />
         </div>
         <div className="h-[640px]">
-          <MultiWindowPanel analysis={analysis} pricePrecision={market?.pricePrecision ?? 4} />
+          <MultiWindowPanel analysis={analysis} pricePrecision={pricePrecision} />
         </div>
+      </div>
+
+      {/* Independent analysts. These three read the chart on their own terms
+          and never feed the composite signal above — they are deliberately a
+          separate opinion, not another input to it. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-2 2xl:grid-cols-3">
+        <div className="h-[600px]"><ChartAnalystPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
+        <div className="h-[600px]"><CandleCloseExpansionPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
+        <div className="h-[600px]"><RangeTradingPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
       </div>
 
       {/* Core intelligence row */}

@@ -8,7 +8,12 @@ import { FullAnalysis } from "@/engines/types";
  * many clients share one computation. Insights arrive with each refresh,
  * giving the AI panel its continuously updating feed.
  */
-export function useAnalysis(symbol: string, timeframe: string, intervalMs = 8000) {
+export function useAnalysis(
+  symbol: string,
+  timeframe: string,
+  intervalMs = 8000,
+  pulseWindow = 60
+) {
   const [analysis, setAnalysis] = useState<FullAnalysis | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -16,9 +21,10 @@ export function useAnalysis(symbol: string, timeframe: string, intervalMs = 8000
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/analysis?symbol=${symbol}&timeframe=${timeframe}`, {
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/analysis?symbol=${symbol}&timeframe=${timeframe}&pulseWindow=${pulseWindow}`,
+        { cache: "no-store" }
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as FullAnalysis;
       setAnalysis(data);
@@ -28,7 +34,7 @@ export function useAnalysis(symbol: string, timeframe: string, intervalMs = 8000
     } finally {
       setLoading(false);
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, pulseWindow]);
 
   useEffect(() => {
     setLoading(true);
