@@ -2,8 +2,17 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// MongoDB (Atlas). The connector requires a replica set, which every Atlas
+// cluster provides; a standalone mongod will not work.
+//
+// Two consequences worth knowing before editing this file:
+//   * There are no migrations. Schema changes ship via `npm run db:push`,
+//     never `prisma migrate` — the migrate engine has no MongoDB support.
+//   * Referential actions (onDelete below) are *emulated by Prisma*, not
+//     enforced by the database. Deleting rows outside Prisma will leave
+//     orphans that the client would have cleaned up.
 datasource db {
-  provider = "mysql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
@@ -28,8 +37,13 @@ enum SignalStatus {
   CANCELLED
 }
 
+// Every `id` below is a cuid mapped onto Mongo's mandatory `_id` rather than a
+// native ObjectId. That keeps the ids identical in shape to the ones the app
+// already generates and stores in signal payloads, so nothing downstream has
+// to learn a second id format.
+
 model User {
-  id          String        @id @default(cuid())
+  id          String        @id @default(cuid()) @map("_id")
   email       String        @unique
   password    String
   name        String?
@@ -42,7 +56,7 @@ model User {
 }
 
 model UserPreference {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String
   key       String
   value     Json
@@ -54,7 +68,7 @@ model UserPreference {
 }
 
 model Signal {
-  id               String       @id @default(cuid())
+  id               String       @id @default(cuid()) @map("_id")
   symbol           String
   timeframe        String
   side             SignalSide
@@ -85,10 +99,12 @@ model Signal {
 }
 
 model StrategyConfig {
-  id          String   @id @default(cuid())
+  id          String   @id @default(cuid()) @map("_id")
   key         String   @unique
   name        String
-  description String   @db.Text
+  // Was @db.Text under MySQL. MongoDB strings are unbounded, so the
+  // annotation is both unnecessary and rejected by this connector.
+  description String
   enabled     Boolean  @default(true)
   weight      Float    @default(1.0)
   totalTrades Int      @default(0)
@@ -99,7 +115,7 @@ model StrategyConfig {
 }
 
 model Backtest {
-  id          String   @id @default(cuid())
+  id          String   @id @default(cuid()) @map("_id")
   symbol      String
   timeframe   String
   strategyKey String
@@ -113,7 +129,7 @@ model Backtest {
 }
 
 model MarketSnapshot {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   symbol    String
   timeframe String
   price     Float
@@ -124,7 +140,7 @@ model MarketSnapshot {
 }
 
 model LearningRecord {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid()) @map("_id")
   signalId     String
   features     Json
   outcome      String
@@ -139,7 +155,7 @@ model LearningRecord {
 }
 
 model AlertChannel {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String
   type      String
   config    Json
@@ -151,7 +167,7 @@ model AlertChannel {
 }
 
 model AuditLog {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String?
   action    String
   meta      Json
