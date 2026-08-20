@@ -22,22 +22,41 @@ import { Bias, Candle, RecentWindowSummary } from "./types";
 
 export interface PulseOptions {
   windowMinutes?: number;
+  /**
+   * Span used to define "normal" volume and range. Must be meaningfully
+   * wider than the window itself, otherwise every multiple collapses to 1x.
+   */
+  baselineMinutes?: number;
   priceBins?: number;
 }
+
+/** Lists are capped so a 60-bar window doesn't flood the panel. */
+const MAX_ABSORPTION = 12;
+const MAX_BIG_TRADES = 12;
+const MAX_SWEEPS = 10;
 
 export function buildPulse(
   minuteCandles: Candle[],
   opts: PulseOptions = {}
 ): RecentWindowSummary | null {
-  const windowMinutes = opts.windowMinutes ?? 5;
+  const windowMinutes = opts.windowMinutes ?? 60;
   const bins = opts.priceBins ?? 24;
   if (minuteCandles.length === 0) return null;
 
   const window = minuteCandles.slice(-windowMinutes);
   if (window.length < 2) return null;
 
-  // Baseline drawn from a wider span so "unusual" means something.
-  const baseline = minuteCandles.slice(-Math.min(60, minuteCandles.length));
+  /*
+   * Baseline drawn from a wider span so "unusual" means something. This has
+   * to scale with the window: a 60-minute window measured against a
+   * 60-minute baseline is measured against itself, so volumeMultiple pins to
+   * 1.0x and the big-trade threshold (volume > avgVol * 2) stops firing.
+   */
+  const requestedBaseline = opts.baselineMinutes ?? Math.max(60, windowMinutes * 4);
+  const baselineMinutes = Math.min(requestedBaseline, minuteCandles.length);
+  const baseline = minuteCandles.slice(-baselineMinutes);
+  // Anything under 2x the window is too narrow to call "normal" honestly.
+  const baselineDegraded = baseline.length < window.length * 2;
   const avgVol = baseline.reduce((s, c) => s + c.volume, 0) / baseline.length;
   const avgRange = baseline.reduce((s, c) => s + (c.high - c.low), 0) / baseline.length;
 
@@ -156,7 +175,7 @@ export function buildPulse(
   }
 
   /* ---------------- Notable bars ---------------- */
-  const bigTrades = window
+  const bigTradesAll = window
     .filter((c) => c.volume > avgVol * 2)
     .map((c) => {
       const buy = c.takerBuyVolume ?? c.volume / 2;
@@ -169,18 +188,20 @@ export function buildPulse(
       };
     });
 
-  const sweeps: RecentWindowSummary["sweeps"] = [];
+  // Running max/min instead of re-scanning the prior slice each bar.
+  const sweepsAll: RecentWindowSummary["sweeps"] = [];
+  let priorHigh = window[0].high;
+  let priorLow = window[0].low;
   for (let i = 1; i < window.length; i++) {
     const c = window[i];
-    const prior = window.slice(0, i);
-    const pHigh = Math.max(...prior.map((p) => p.high));
-    const pLow = Math.min(...prior.map((p) => p.low));
-    if (c.high > pHigh && c.close < pHigh) {
-      sweeps.push({ time: c.time, price: pHigh, direction: "above", note: `Swept the local high at ${pHigh.toFixed(4)} and closed back below — buy stops were taken.` });
+    if (c.high > priorHigh && c.close < priorHigh) {
+      sweepsAll.push({ time: c.time, price: priorHigh, direction: "above", note: `Swept the local high at ${priorHigh.toFixed(4)} and closed back below — buy stops were taken.` });
     }
-    if (c.low < pLow && c.close > pLow) {
-      sweeps.push({ time: c.time, price: pLow, direction: "below", note: `Swept the local low at ${pLow.toFixed(4)} and closed back above — sell stops were taken.` });
+    if (c.low < priorLow && c.close > priorLow) {
+      sweepsAll.push({ time: c.time, price: priorLow, direction: "below", note: `Swept the local low at ${priorLow.toFixed(4)} and closed back above — sell stops were taken.` });
     }
+    priorHigh = Math.max(priorHigh, c.high);
+    priorLow = Math.min(priorLow, c.low);
   }
 
   const volumeTrendPct = (() => {
@@ -245,20 +266,20 @@ export function buildPulse(
   }
 
   // 5. Stop hunts lean toward reversal of the sweep direction.
-  const lastSweep = sweeps[sweeps.length - 1];
+  const lastSweep = sweepsAll[sweepsAll.length - 1];
   if (lastSweep) {
     const sweepPoints = lastSweep.direction === "above" ? -12 : 12;
     factors.push({ label: "Stop hunt", points: sweepPoints, detail: lastSweep.note });
   }
 
   // 6. Big trades lean with their own side.
-  if (bigTrades.length > 0) {
-    const netBig = bigTrades.reduce((s, b) => s + (b.side === "buy" ? b.multiple : -b.multiple), 0);
+  if (bigTradesAll.length > 0) {
+    const netBig = bigTradesAll.reduce((s, b) => s + (b.side === "buy" ? b.multiple : -b.multiple), 0);
     const bigPoints = clamp(netBig * 3, -14, 14);
     factors.push({
       label: "Large orders",
       points: bigPoints,
-      detail: `${bigTrades.length} outsized print(s), net ${netBig >= 0 ? "buy" : "sell"} skewed.`,
+      detail: `${bigTradesAll.length} outsized print(s), net ${netBig >= 0 ? "buy" : "sell"} skewed.`,
     });
   }
 
@@ -322,6 +343,8 @@ export function buildPulse(
 
   return {
     windowMinutes,
+    baselineMinutes: baseline.length,
+    baselineDegraded,
     from: window[0].time,
     to: window[window.length - 1].time,
     priceStart,
@@ -339,10 +362,16 @@ export function buildPulse(
     volumeTrendPct: Number(volumeTrendPct.toFixed(1)),
     mostTradedPrices,
     poc,
-    absorptionCandles,
+    // Scoring used every event; the panel only shows the strongest few.
+    absorptionCandles: [...absorptionCandles]
+      .sort((a, b) => b.volumeMultiple - a.volumeMultiple)
+      .slice(0, MAX_ABSORPTION),
+    absorptionTotalCount: absorptionCandles.length,
     institutionalZones,
-    bigTrades,
-    sweeps,
+    bigTrades: [...bigTradesAll].sort((a, b) => b.multiple - a.multiple).slice(0, MAX_BIG_TRADES),
+    bigTradesTotalCount: bigTradesAll.length,
+    sweeps: sweepsAll.slice(-MAX_SWEEPS),
+    sweepsTotalCount: sweepsAll.length,
     factors,
     bullishOdds,
     bearishOdds,

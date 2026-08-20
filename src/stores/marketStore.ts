@@ -37,15 +37,21 @@ export interface OverlayToggles {
   cvd: boolean;
 }
 
+/** Market Pulse conclusion window, in minutes. */
+export type PulseWindow = 5 | 15 | 60;
+
 interface MarketState {
   symbol: string;
   timeframe: Timeframe;
   overlays: OverlayToggles;
   sidebarCollapsed: boolean;
+  /** how far back the Market Pulse box concludes over */
+  pulseWindowMinutes: PulseWindow;
   setSymbol: (s: string) => void;
   setTimeframe: (tf: Timeframe) => void;
   toggleOverlay: (key: keyof OverlayToggles) => void;
   toggleSidebar: () => void;
+  setPulseWindow: (m: PulseWindow) => void;
 }
 
 export const useMarketStore = create<MarketState>()(
@@ -79,15 +85,19 @@ export const useMarketStore = create<MarketState>()(
         cvd: false,
       },
       sidebarCollapsed: false,
+      // An hour of 1m candles reads market sentiment far more steadily than
+      // five minutes, which is mostly noise.
+      pulseWindowMinutes: 60,
       setSymbol: (symbol) => set({ symbol }),
       setTimeframe: (timeframe) => set({ timeframe }),
       toggleOverlay: (key) =>
         set((s) => ({ overlays: { ...s.overlays, [key]: !s.overlays[key] } })),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setPulseWindow: (pulseWindowMinutes) => set({ pulseWindowMinutes }),
     }),
     {
       name: "tm-market",
-      version: 2,
+      version: 3,
       /**
        * Overlay toggles are additive over time. Merge persisted values on
        * top of the current defaults so a browser holding an older shape

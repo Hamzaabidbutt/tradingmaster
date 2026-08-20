@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchKlines } from "@/lib/binance";
-import { isValidSymbol, isValidTimeframe } from "@/lib/config";
+import { isValidTimeframe } from "@/lib/config";
+import { isTradableSymbol } from "@/lib/symbols";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +10,9 @@ export async function GET(req: NextRequest) {
   const tf = req.nextUrl.searchParams.get("timeframe") ?? "";
   const limit = Math.min(1500, Number(req.nextUrl.searchParams.get("limit") ?? 500));
 
-  if (!isValidSymbol(symbol)) return NextResponse.json({ error: "Unknown symbol" }, { status: 400 });
   if (!isValidTimeframe(tf)) return NextResponse.json({ error: "Unknown timeframe" }, { status: 400 });
+  if (!(await isTradableSymbol(symbol)))
+    return NextResponse.json({ error: "Unknown symbol" }, { status: 400 });
 
   try {
     const candles = await fetchKlines(symbol, tf, limit);

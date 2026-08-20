@@ -480,6 +480,10 @@ export interface LiquidationDeltaResult {
 
 export interface RecentWindowSummary {
   windowMinutes: number;
+  /** span used to define "normal" volume/range — always wider than the window */
+  baselineMinutes: number;
+  /** true when the input series was too short for an honest baseline */
+  baselineDegraded: boolean;
   from: number;
   to: number;
   priceStart: number;
@@ -509,6 +513,8 @@ export interface RecentWindowSummary {
     volumeMultiple: number;
     note: string;
   }[];
+  /** full count before the display cap — scoring used all of them */
+  absorptionTotalCount: number;
   /** the price band that soaked up the bulk of the volume */
   institutionalZones: {
     priceLow: number;
@@ -519,7 +525,9 @@ export interface RecentWindowSummary {
     note: string;
   }[];
   bigTrades: { time: number; price: number; side: "buy" | "sell"; volume: number; multiple: number }[];
+  bigTradesTotalCount: number;
   sweeps: { time: number; price: number; direction: "above" | "below"; note: string }[];
+  sweepsTotalCount: number;
   /** transparent breakdown of what produced the odds */
   factors: { label: string; points: number; detail: string }[];
   bullishOdds: number;
@@ -586,6 +594,186 @@ export interface MultiWindowResult {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Chart Analyst — pattern & price action only
+ *
+ * Deliberately isolated from every other module: no indicators, no order
+ * book, no liquidity/funding/liquidation data. It reads the chart the way a
+ * human does — shapes, candles, and what happened last time the chart
+ * looked like this.
+ * ------------------------------------------------------------------ */
+
+/** A geometric formation fitted over swing highs/lows. */
+export interface ChartShape {
+  name: string;
+  kind:
+    | "ascending_triangle"
+    | "descending_triangle"
+    | "symmetrical_triangle"
+    | "rising_wedge"
+    | "falling_wedge"
+    | "ascending_channel"
+    | "descending_channel"
+    | "rectangle"
+    | "bull_flag"
+    | "bear_flag"
+    | "head_and_shoulders"
+    | "inverse_head_and_shoulders"
+    | "double_top"
+    | "double_bottom";
+  /** the break direction the formation conventionally resolves toward */
+  direction: Bias;
+  /** how complete the formation is, 0-100 */
+  maturity: number;
+  strength: number;
+  upperBoundary: number;
+  lowerBoundary: number;
+  /** measured-move projection if it resolves in its expected direction */
+  measuredTarget: number;
+  startTime: number;
+  note: string;
+}
+
+/** A past stretch of chart whose normalized shape resembles the present. */
+export interface HistoricalAnalogue {
+  startIndex: number;
+  startTime: number;
+  endTime: number;
+  /** 0-100, higher = closer shape match */
+  similarity: number;
+  /** what price did over the bars that followed the match, % */
+  forwardReturnPct: number;
+  forwardDirection: Bias;
+  /** best and worst excursion after the match, % */
+  maxUpPct: number;
+  maxDownPct: number;
+  note: string;
+}
+
+export interface ChartAnalystResult {
+  /** bars used to define the current shape */
+  windowBars: number;
+  /** bars of history actually searched */
+  historyBars: number;
+  currentPattern: {
+    headline: string;
+    candlestick: CandlePattern[];
+    shapes: ChartShape[];
+    priceAction: string[];
+  };
+  historicalMatches: HistoricalAnalogue[];
+  expectedNextMove: {
+    direction: Bias;
+    /** median forward move of the closest analogues, % */
+    magnitudePct: number;
+    /** null when the analogues are too split to project one */
+    target: number | null;
+    /** null when no direction is claimed */
+    invalidation: number | null;
+    horizonBars: number;
+    rationale: string[];
+  };
+  bullishScenario: { trigger: string; target: number; probability: number; note: string };
+  bearishScenario: { trigger: string; target: number; probability: number; note: string };
+  confidence: number;
+  confidenceLabel: "Low" | "Moderate" | "High" | "Very High";
+  patternExplanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Candle Close Expansion — key levels + decisive closes
+ * ------------------------------------------------------------------ */
+
+export interface CandleCloseExpansionResult {
+  keyLevel: {
+    price: number;
+    kind: "support" | "resistance";
+    touches: number;
+    /** touches that closed back away from the level */
+    respects: number;
+    /** share of prior breaks that failed and returned inside, 0-1 */
+    historicalFalseBreakRate: number;
+    note: string;
+  } | null;
+  candleClose: "above" | "below" | "inside";
+  closePrice: number;
+  closeTime: number;
+  breakoutDirection: "bullish" | "bearish" | "none";
+  /** why this close counts (or doesn't) — a crossing alone is never enough */
+  decisiveness: {
+    score: number;
+    /** distance the close travelled beyond the level, in ATR units */
+    penetrationAtr: number;
+    bodyRatio: number;
+    /** where the candle closed inside its own range, 0 = low, 1 = high */
+    closeLocation: number;
+    volumeMultiple: number;
+    followThroughBars: number;
+    verdict: "decisive" | "marginal" | "weak" | "none";
+    checks: { label: string; passed: boolean; detail: string }[];
+  };
+  expansionProbability: "Low" | "Medium" | "High";
+  expansionScore: number;
+  expectedDirection: "up" | "down" | "uncertain";
+  expansionTarget: number | null;
+  invalidationLevel: number | null;
+  reason: string[];
+  /** previous closes through this same level and what followed */
+  historicalPrecedents: {
+    time: number;
+    direction: "above" | "below";
+    decisive: boolean;
+    followThroughPct: number;
+    failed: boolean;
+    note: string;
+  }[];
+  summary: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Range Trading Strategy
+ * ------------------------------------------------------------------ */
+
+export interface RangeTradingResult {
+  marketCondition: "Ranging" | "Trending" | "Unclear";
+  rangeHigh: number | null;
+  rangeLow: number | null;
+  rangeMidpoint: number | null;
+  rangeWidthPct: number | null;
+  /** bars the candidate range spans */
+  rangeBars: number;
+  highTouches: number;
+  lowTouches: number;
+  /** share of bars whose bodies stayed inside the boundaries, 0-1 */
+  containment: number;
+  currentPosition: "Near High" | "Mid Range" | "Near Low" | "Outside";
+  rangeSetup: "Long" | "Short" | "No Trade" | "Breakout";
+  bias: Bias;
+  confidence: number;
+  confidenceLabel: "Low" | "Moderate" | "High" | "Very High";
+  potentialEntry: number | null;
+  /** first target is always the midpoint, second the opposite boundary */
+  target1: number | null;
+  target2: number | null;
+  invalidation: number | null;
+  /** the evidence gates, shown so a rejected range explains itself */
+  validation: { label: string; passed: boolean; detail: string }[];
+  boundaryReactions: {
+    boundary: "high" | "low";
+    time: number;
+    kind: "rejection" | "failed_breakout" | "decisive_close_outside";
+    price: number;
+    note: string;
+  }[];
+  breakout: {
+    active: boolean;
+    direction: "up" | "down" | null;
+    stage: "none" | "attempt" | "confirmed" | "retest" | "false_breakout";
+    note: string;
+  };
+  reason: string[];
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -594,7 +782,6 @@ export interface StrategyScore {
   weight: number;
   reasons: string[];
 }
-
 export interface TradeSetup {
   side: "BUY" | "SELL";
   entry: number;
@@ -641,6 +828,12 @@ export interface FullAnalysis {
   /** null when 1-minute candles were unavailable */
   pulse: RecentWindowSummary | null;
   multiWindow: MultiWindowResult;
+  /** chart-only read: patterns, price action, historical analogues */
+  chartAnalyst: ChartAnalystResult;
+  /** key levels + decisive candle closes → expansion probability */
+  candleCloseExpansion: CandleCloseExpansionResult;
+  /** range detection and boundary-reaction setups */
+  rangeTrading: RangeTradingResult;
   bias: Bias;
   bullishProbability: number;
   bearishProbability: number;

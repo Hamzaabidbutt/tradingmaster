@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { dispatchAlert } from "@/lib/alerts";
-import { fetchKlines, fetchTicker } from "@/lib/binance";
+import { fetchKlines, fetchKlinesPaged, fetchTicker } from "@/lib/binance";
 import { analyzeMarket } from "@/engines/analyzer";
 import { STRATEGIES } from "@/engines/strategies";
 import { buildTradeRetrospective, computeWeightAdjustments } from "@/engines/learning";
@@ -11,6 +11,12 @@ import { ENGINE_DEFAULTS, FOOTPRINT_SOURCE, Timeframe } from "@/lib/config";
 /**
  * Signal lifecycle service: generation → persistence → evaluation → learning.
  */
+
+/**
+ * Bars of same-timeframe history fetched for the Chart Analyst's analogue
+ * search. Paged in 1500-bar chunks, so this is a handful of requests.
+ */
+const DEEP_HISTORY_BARS = 3000;
 
 export async function getStrategyWeights(): Promise<Record<string, { weight: number; enabled: boolean }>> {
   try {
@@ -50,10 +56,24 @@ export async function ensureStrategyConfigs(): Promise<void> {
  * a genuine bid × ask ladder per candle instead of falling back to a
  * modelled distribution. The sub-candle fetch is best-effort: if it fails
  * the analysis still runs, just with `footprint.fidelity === "estimated"`.
+ *
+ * Two further best-effort series:
+ *  - 1m candles for the Market Pulse window, sized to the requested window
+ *    so its "normal volume" baseline is always strictly wider than the
+ *    window itself (otherwise every multiple collapses to 1x).
+ *  - deep same-timeframe history for the Chart Analyst's analogue search.
+ *    More history means more precedents; without it the search falls back to
+ *    the analysis window and simply finds fewer.
  */
-export async function analyzeSymbol(symbol: string, timeframe: Timeframe): Promise<FullAnalysis> {
+export async function analyzeSymbol(
+  symbol: string,
+  timeframe: Timeframe,
+  pulseWindowMinutes = 60
+): Promise<FullAnalysis> {
   const subTf = FOOTPRINT_SOURCE[timeframe];
-  const [candles, weights, subCandles, minuteCandles] = await Promise.all([
+  // Window + a 4x baseline, with headroom. Binance caps a single call at 1500.
+  const minuteBars = Math.min(1500, Math.max(360, pulseWindowMinutes * 5));
+  const [candles, weights, subCandles, minuteCandles, deepCandles] = await Promise.all([
     fetchKlines(symbol, timeframe, ENGINE_DEFAULTS.analysisLookback),
     getStrategyWeights(),
     subTf
@@ -63,8 +83,12 @@ export async function analyzeSymbol(symbol: string, timeframe: Timeframe): Promi
         })
       : Promise.resolve(null),
     // 1m series powers the Market Pulse window independently of the chart TF.
-    fetchKlines(symbol, "1m", 90).catch((err) => {
+    fetchKlines(symbol, "1m", minuteBars).catch((err) => {
       logger.warn("signals.minutecandles.unavailable", { symbol, error: String(err) });
+      return null;
+    }),
+    fetchKlinesPaged(symbol, timeframe, DEEP_HISTORY_BARS).catch((err) => {
+      logger.warn("signals.deepcandles.unavailable", { symbol, error: String(err) });
       return null;
     }),
   ]);
@@ -73,6 +97,8 @@ export async function analyzeSymbol(symbol: string, timeframe: Timeframe): Promi
     subCandles,
     subTimeframe: subTf ?? undefined,
     minuteCandles,
+    pulseWindowMinutes,
+    deepCandles,
   });
 }
 
