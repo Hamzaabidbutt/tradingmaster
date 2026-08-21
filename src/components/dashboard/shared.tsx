@@ -13,8 +13,16 @@ import { AnalystKey, AnalystVerdict, OutcomeReason } from "@/engines/types";
  * domain — setups, analysts, outcome classes — while primitives are generic.
  */
 
-/** Scan timeframes offered on the dashboard. One klines call per coin each. */
-export const SCAN_TIMEFRAMES = ["15m", "1h", "4h"] as const;
+/**
+ * Scan timeframes offered on the dashboard. One klines call per coin each.
+ *
+ * The full `TIMEFRAMES` list is not offered here. A scan is one klines call per
+ * coin across the whole universe, so every entry added is another ~527-request
+ * sweep the worker has to cover — and the sub-5m intervals produce setups that
+ * expire before the 3-minute scan cache does, which would put stale entries on
+ * the board and call them live.
+ */
+export const SCAN_TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d", "1w"] as const;
 export type ScanTimeframe = (typeof SCAN_TIMEFRAMES)[number];
 
 export const ANALYST_LABEL: Record<AnalystKey, string> = {

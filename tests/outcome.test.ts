@@ -53,13 +53,20 @@ function signal(over: Partial<OutcomeSignal> = {}): OutcomeSignal {
   };
 }
 
-/** Excursion literal, so failure classes can be driven exactly. */
-function exc(favourableR: number, adverseR: number, bars = 20): Excursion {
+/**
+ * Excursion literal, so failure classes can be driven exactly.
+ *
+ * `targetProgressPct` defaults to null — the classifier must behave correctly
+ * for legacy rows that carry no figure, and every pre-existing case in this file
+ * asserts on the reason and the attribution, not on the progress line.
+ */
+function exc(favourableR: number, adverseR: number, bars = 20, targetProgressPct: number | null = null): Excursion {
   return {
     maxFavourableR: favourableR,
     maxAdverseR: adverseR,
     maxFavourablePct: favourableR * 2,
     maxAdversePct: adverseR * 2,
+    targetProgressPct,
     bars,
   };
 }
@@ -117,6 +124,96 @@ describe("computeExcursion", () => {
     const e = computeExcursion(series, { side: "BUY", entry: 100, stopLoss: 100 }, T0);
     expect(Number.isFinite(e.maxFavourableR)).toBe(true);
     expect(e.maxFavourableR).toBe(0);
+  });
+
+  /* -- how far toward the first target ------------------------------- */
+
+  it("reports the share of the entry→TP1 distance the move covered", () => {
+    // Entry 100, TP1 105 → the first leg is 5 wide. The high of 103 is 3 of
+    // those 5, so the signal got 60% of the way before whatever happened next.
+    const e = computeExcursion(series, { side: "BUY", entry: 100, stopLoss: 98, tp1: 105 }, T0);
+    expect(e.targetProgressPct).toBeCloseTo(60, 1);
+  });
+
+  it("computes target progress identically for a mirrored SHORT", () => {
+    // The mirror of the case above about the 100 axis: a fall to 97 against a
+    // TP1 of 95 is the same 60% of the same-width leg. Identical construction,
+    // not a separate code path — this is the LONG/SHORT parity requirement
+    // applied to the "how close did it get" figure.
+    const mirrored = [
+      candle(T0 + 0 * HOUR, 100, 100.5, 99, 99.5),
+      candle(T0 + 1 * HOUR, 99.5, 100, 97, 97.5),
+      candle(T0 + 2 * HOUR, 97.5, 101, 97.2, 100.5),
+    ];
+    const e = computeExcursion(mirrored, { side: "SELL", entry: 100, stopLoss: 102, tp1: 95 }, T0);
+    expect(e.targetProgressPct).toBeCloseTo(60, 1);
+  });
+
+  it("withholds target progress when no first target was quoted", () => {
+    // null, not 0. A caller that never supplied a target has told us nothing
+    // about how close the signal came, and "0% of the way" would be a claim.
+    const e = computeExcursion(series, { side: "BUY", entry: 100, stopLoss: 98 }, T0);
+    expect(e.targetProgressPct).toBeNull();
+    const flat = computeExcursion(series, { side: "BUY", entry: 100, stopLoss: 98, tp1: 100 }, T0);
+    expect(flat.targetProgressPct).toBeNull();
+  });
+
+  it("reports above 100% when price ran past the first target and came back", () => {
+    // Deliberately not clamped: a signal that tagged TP1 and then reversed
+    // covered the whole leg, and hiding that would make a management failure
+    // look like a directional one.
+    const e = computeExcursion(series, { side: "BUY", entry: 100, stopLoss: 98, tp1: 101.5 }, T0);
+    expect(e.targetProgressPct).toBeGreaterThan(100);
+    expect(e.targetProgressPct).toBeCloseTo(200, 0); // 3 of a 1.5-wide leg
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * "How close did it get?" in the narrative
+ * ------------------------------------------------------------------ */
+
+describe("classifyOutcome — target progress narrative", () => {
+  const stopped = signal({
+    verdicts: [verdict("candleClose", { direction: "long", confidence: 80, entry: 100 })],
+  });
+
+  it("states how far a loser got, and what was left", () => {
+    const out = classifyOutcome(stopped, exc(0.2, 1, 20, 42.5));
+    const line = out.detail.find((d) => d.includes("Approached"));
+    expect(line).toBeDefined();
+    expect(line).toContain("42.5%");
+    expect(line).toContain("57.5%"); // the part that never came
+    expect(line).toContain("102"); // the first target it was measured against
+  });
+
+  it("says the whole leg was covered when a loser ran past TP1 first", () => {
+    const out = classifyOutcome(stopped, exc(1.4, 1, 20, 140));
+    const line = out.detail.find((d) => d.includes("Approached"));
+    expect(line).toContain("140.0%");
+    expect(line).toContain("whole of that first leg");
+    // And the reversal classification still stands on its own.
+    expect(out.reason).toBe("unexpected_reversal");
+  });
+
+  it("prints no progress line at all when the figure is missing", () => {
+    // A legacy row. Silence is correct; "0% of the way" would be a fabrication.
+    const out = classifyOutcome(stopped, exc(0.2, 1));
+    expect(out.detail.some((d) => d.includes("Approached"))).toBe(false);
+  });
+
+  it("carries the figure on winners too, where it measures overshoot", () => {
+    const won = signal({ status: "TP3_HIT", resultPnlPct: 4, verdicts: stopped.verdicts });
+    const out = classifyOutcome(won, exc(2.6, 0.2, 30, 260));
+    expect(out.detail.some((d) => d.includes("Approached 260.0%"))).toBe(true);
+  });
+
+  it("stays silent on an expired-flat signal, where absence is the point", () => {
+    // That branch's whole message is "nothing happened"; a progress figure
+    // would invite the reader to grade a move that was never made.
+    const flat = signal({ status: "EXPIRED", resultPnlPct: 0.1, verdicts: stopped.verdicts });
+    const out = classifyOutcome(flat, exc(0.1, 0.1, 20, 5));
+    expect(out.reason).toBe("expired_no_move");
+    expect(out.detail.some((d) => d.includes("Approached"))).toBe(false);
   });
 });
 

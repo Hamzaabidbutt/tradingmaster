@@ -84,28 +84,49 @@ const EMPTY_EXCURSION: Excursion = {
   maxAdverseR: 0,
   maxFavourablePct: 0,
   maxAdversePct: 0,
+  targetProgressPct: null,
   bars: 0,
 };
+
+/** Two decimals, as a number rather than a string. */
+function r2(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+/**
+ * A price, trimmed to its significant decimals.
+ *
+ * `toFixed(6)` alone leaves "102.000000"; stripping trailing zeros alone leaves
+ * "102." — both stops are needed for a price that reads like a price.
+ */
+function priceText(value: number): string {
+  return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
 
 /**
  * Maximum favourable / adverse excursion between entry and close.
  *
  * Expressed in R (multiples of the initial stop distance) as well as percent,
  * because R is what makes excursions comparable across a 0.4 %-risk BTC
- * signal and a 6 %-risk altcoin signal.
+ * signal and a 6 %-risk altcoin signal — plus, when a first target is known,
+ * as a share of the distance to that target, which is the form the question
+ * "how close did it get before it failed?" is actually asked in.
  *
  * `candles` should start at or after the signal's creation time; anything
  * earlier is ignored so a pre-entry wick cannot be counted as an excursion.
+ *
+ * `tp1` is optional so callers that only have the risk leg — and the tests that
+ * drive the R thresholds directly — still compile; they get `null` progress
+ * rather than a fabricated 0.
  */
 export function computeExcursion(
   candles: Candle[],
-  signal: Pick<OutcomeSignal, "side" | "entry" | "stopLoss">,
+  signal: Pick<OutcomeSignal, "side" | "entry" | "stopLoss"> & { tp1?: number | null },
   fromTime: number,
   toTime?: number
 ): Excursion {
-  const risk = Math.abs(signal.entry - signal.stopLoss);
   const window = candles.filter((c) => c.time >= fromTime && (toTime === undefined || c.time <= toTime));
-  if (window.length === 0 || risk <= 0) return { ...EMPTY_EXCURSION, bars: window.length };
+  if (window.length === 0) return { ...EMPTY_EXCURSION };
 
   const isLong = signal.side === "BUY";
   const best = isLong
@@ -115,16 +136,23 @@ export function computeExcursion(
     ? Math.min(...window.map((c) => c.low))
     : Math.max(...window.map((c) => c.high));
 
-  const favourable = isLong ? best - signal.entry : signal.entry - best;
-  const adverse = isLong ? signal.entry - worst : worst - signal.entry;
+  // Clamped at 0: an excursion is a distance travelled, so "the best move in
+  // our favour" cannot be negative even if price never traded above entry.
+  const favourable = Math.max(0, isLong ? best - signal.entry : signal.entry - best);
+  const adverse = Math.max(0, isLong ? signal.entry - worst : worst - signal.entry);
+
+  // A zero stop distance makes the R multiples meaningless — every move would
+  // be infinite R — so those degrade to 0 while the percent figures, which
+  // divide by the entry rather than the stop, stay real.
+  const risk = Math.abs(signal.entry - signal.stopLoss);
+  const span = signal.tp1 === null || signal.tp1 === undefined ? 0 : Math.abs(signal.tp1 - signal.entry);
 
   return {
-    // Clamped at 0: an excursion is a distance travelled, so "the best move in
-    // our favour" cannot be negative even if price never traded above entry.
-    maxFavourableR: Number(Math.max(0, favourable / risk).toFixed(2)),
-    maxAdverseR: Number(Math.max(0, adverse / risk).toFixed(2)),
-    maxFavourablePct: Number(Math.max(0, (favourable / signal.entry) * 100).toFixed(2)),
-    maxAdversePct: Number(Math.max(0, (adverse / signal.entry) * 100).toFixed(2)),
+    maxFavourableR: risk > 0 ? r2(favourable / risk) : 0,
+    maxAdverseR: risk > 0 ? r2(adverse / risk) : 0,
+    maxFavourablePct: signal.entry > 0 ? r2((favourable / signal.entry) * 100) : 0,
+    maxAdversePct: signal.entry > 0 ? r2((adverse / signal.entry) * 100) : 0,
+    targetProgressPct: span > 0 ? Number(((favourable / span) * 100).toFixed(1)) : null,
     bars: window.length,
   };
 }
@@ -177,7 +205,7 @@ function workingConfirmation(
   if (hit.length > 0) {
     const v = hit[0];
     return {
-      text: `${v.name} — its ${v.target!.toFixed(6).replace(/0+$/, "")} target was reached; the read was "${v.evidence}"`,
+      text: `${v.name} — its ${priceText(v.target!)} target was reached; the read was "${v.evidence}"`,
       analyst: v.analyst,
     };
   }
@@ -226,6 +254,24 @@ export function classifyOutcome(signal: OutcomeSignal, excursion: Excursion): Ou
   let vindicatedAbstentions: AnalystKey[] = [];
 
   /**
+   * "How close did it get?" — in the unit the question is actually asked in: a
+   * share of the distance from entry to the first target, which is identical in
+   * construction for a LONG and a SHORT.
+   *
+   * Withheld entirely when the excursion carries no figure. A printed "0 % of
+   * the way" would read as "price never moved", which is a different claim from
+   * "we do not know how far it got".
+   */
+  const progress = excursion.targetProgressPct;
+  const progressLine =
+    progress === null || progress === undefined
+      ? null
+      : `Approached ${progress.toFixed(1)}% of the distance from entry ${priceText(signal.entry)} to the first target ${priceText(signal.tp1)}` +
+        (progress >= 100
+          ? ` — the whole of that first leg was covered.`
+          : `, so the remaining ${(100 - progress).toFixed(1)}% of that leg never came.`);
+
+  /**
    * A signal that expired flat is a statement about the *absence* of a move,
    * and that reading outranks the P/L sign: +0.1% is no more evidence that an
    * analyst was right than -0.1% is evidence it was wrong. `win` still follows
@@ -258,6 +304,7 @@ export function classifyOutcome(signal: OutcomeSignal, excursion: Excursion): Ou
     detail.push(
       `Price ran ${excursion.maxFavourableR.toFixed(2)}R (${excursion.maxFavourablePct.toFixed(2)}%) in favour and ${excursion.maxAdverseR.toFixed(2)}R (${excursion.maxAdversePct.toFixed(2)}%) against over ${excursion.bars} bars.`
     );
+    if (progressLine) detail.push(progressLine);
     if (excursion.maxAdverseR >= 0.7) {
       detail.push(
         `It came within ${(1 - excursion.maxAdverseR).toFixed(2)}R of the stop first — the entry was right but the level was tight.`
@@ -289,7 +336,7 @@ export function classifyOutcome(signal: OutcomeSignal, excursion: Excursion): Ou
       reason = "false_breakout";
       const lvl = closeVote.entry;
       detail.push(
-        `A decisive close through ${lvl !== null ? lvl.toFixed(6).replace(/0+$/, "") : "the key level"} failed immediately — only ${excursion.maxFavourableR.toFixed(2)}R of follow-through before the stop. This is the false-breakout case the module is meant to filter, and it slipped through.`
+        `A decisive close through ${lvl !== null ? priceText(lvl) : "the key level"} failed immediately — only ${excursion.maxFavourableR.toFixed(2)}R of follow-through before the stop. This is the false-breakout case the module is meant to filter, and it slipped through.`
       );
       analystsWrong = supporters.map((v) => v.analyst);
     } else if (rangeVote && excursion.maxFavourableR < 0.3) {
@@ -298,7 +345,7 @@ export function classifyOutcome(signal: OutcomeSignal, excursion: Excursion): Ou
       reason = rangeVote.invalidation !== null ? "range_invalidation" : "failed_rejection";
       detail.push(
         reason === "range_invalidation"
-          ? `The range gave way — price closed through ${rangeVote.invalidation!.toFixed(6).replace(/0+$/, "")} and stayed out, so the boundary that justified the entry no longer existed.`
+          ? `The range gave way — price closed through ${priceText(rangeVote.invalidation!)} and stayed out, so the boundary that justified the entry no longer existed.`
           : `The expected rejection at the ${isLong ? "range low" : "range high"} never came; price traded straight through the boundary.`
       );
       analystsWrong = supporters.map((v) => v.analyst);
@@ -332,6 +379,7 @@ export function classifyOutcome(signal: OutcomeSignal, excursion: Excursion): Ou
       detail.push(`${names.join(" and ")} abstained and ${names.length === 1 ? "was" : "were"} vindicated.`);
       vindicatedAbstentions = abstained;
     }
+    if (progressLine) detail.push(progressLine);
     detail.push(
       `Excursion: ${excursion.maxFavourableR.toFixed(2)}R favourable / ${excursion.maxAdverseR.toFixed(2)}R adverse over ${excursion.bars} bars.`
     );

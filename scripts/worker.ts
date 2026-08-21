@@ -10,7 +10,7 @@
  * Run alongside the web app:  npm run worker
  * (In docker-compose it runs as its own service.)
  */
-import { MARKETS, Timeframe } from "../src/lib/config";
+import { MARKETS, TIMEFRAME_MINUTES, Timeframe } from "../src/lib/config";
 import { logger } from "../src/lib/logger";
 import {
   analyzeSymbol,
@@ -22,8 +22,33 @@ import {
 import { persistScan, rankUniverse, scanSymbol, ScanEntry } from "../src/services/scanService";
 import { prisma } from "../src/lib/db";
 
-const WORKER_TIMEFRAMES: Timeframe[] = ["15m", "1h", "4h"];
+const WORKER_TIMEFRAMES: Timeframe[] = ["5m", "15m", "1h", "4h", "1d", "1w"];
 const INTERVAL_MS = Number(process.env.WORKER_INTERVAL_SEC ?? 60) * 1000;
+
+/**
+ * Longest gap between passes on one timeframe, in minutes.
+ *
+ * Each timeframe is re-analysed no more often than its own bar length: a 1d
+ * setup does not change because 60 seconds passed, and re-running it every tick
+ * spends five network fetches per market to recompute an identical answer. The
+ * hour cap keeps the daily and weekly passes responsive enough to open a signal
+ * within an hour of a bar closing, rather than waiting a full week.
+ *
+ * Without this, adding 5m/1d/1w would double the composite pass from 21
+ * analyses per tick to 42 — and the pass already runs longer than INTERVAL_MS.
+ */
+const MAX_STAGGER_MIN = 60;
+
+/** Last completed pass per timeframe, as epoch ms. Empty means "never run". */
+const lastPassAt = new Map<Timeframe, number>();
+
+/** True when `tf` is due for another pass. */
+function isDue(tf: Timeframe, now: number): boolean {
+  const last = lastPassAt.get(tf);
+  if (last === undefined) return true; // never run — do it on the first tick
+  const everyMin = Math.min(TIMEFRAME_MINUTES[tf] ?? 60, MAX_STAGGER_MIN);
+  return now - last >= everyMin * 60_000;
+}
 
 /** Timeframe the universe sweep runs on. Matches the dashboard default. */
 const SCAN_TIMEFRAME: Timeframe = (process.env.SCAN_TIMEFRAME as Timeframe) ?? "1h";
@@ -48,9 +73,11 @@ async function tick(): Promise<void> {
     logger.error("worker.evaluate.failed", { error: String(err) });
   }
 
-  // 2) Scan all markets/timeframes sequentially (kind to Binance rate limits).
+  // 2) Scan all markets on every timeframe that is due (kind to rate limits).
+  const due = WORKER_TIMEFRAMES.filter((tf) => isDue(tf, Date.now()));
+  if (due.length > 0) logger.info("worker.pass.due", { timeframes: due });
   for (const market of MARKETS) {
-    for (const tf of WORKER_TIMEFRAMES) {
+    for (const tf of due) {
       try {
         const analysis = await analyzeSymbol(market.symbol, tf);
         const id = await maybePersistSignal(analysis);
@@ -78,6 +105,10 @@ async function tick(): Promise<void> {
       await sleep(400); // stay well inside Binance API weight limits
     }
   }
+  // Stamped after the pass, not before, so a slow sweep does not immediately
+  // become due again on the next tick.
+  const finishedAt = Date.now();
+  for (const tf of due) lastPassAt.set(tf, finishedAt);
 
   // 3) Rolling universe sweep for confluence setups.
   await scanUniverseSlice();

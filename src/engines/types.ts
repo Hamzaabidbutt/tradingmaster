@@ -1008,6 +1008,24 @@ export interface Excursion {
   maxAdverseR: number;
   maxFavourablePct: number;
   maxAdversePct: number;
+  /**
+   * How much of the entry→first-target distance the favourable move covered,
+   * as a percent. 100 means the first target was tagged; 40 means the signal
+   * got 40 % of the way there before failing.
+   *
+   * Measured against TP1 rather than TP3 because TP1 is the target a signal is
+   * actually judged on — a stop-out that reached 90 % of TP1 is a near miss,
+   * while 90 % of TP3 could be a comfortable win. Because both the numerator
+   * and the denominator are distances *from entry*, the figure is identical in
+   * construction for a LONG and a SHORT.
+   *
+   * Nullable, and null is the honest answer in three cases: a legacy row stored
+   * before this field existed, a signal that quoted no first target, and a
+   * target equal to the entry. Not clamped at 100 — a signal that ran past TP1
+   * and then reversed genuinely covered the whole distance, and hiding that
+   * would make a management failure look like a directional one.
+   */
+  targetProgressPct: number | null;
   /** bars observed between entry and close */
   bars: number;
 }

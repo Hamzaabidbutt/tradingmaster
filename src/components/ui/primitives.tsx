@@ -70,10 +70,18 @@ export function StatChip({
 }: {
   label: string;
   value: ReactNode;
-  tone?: "bull" | "bear" | "neutral" | "cyan";
+  tone?: "bull" | "bear" | "neutral" | "cyan" | "amber";
 }) {
   const color =
-    tone === "bull" ? "text-bull" : tone === "bear" ? "text-bear" : tone === "cyan" ? "text-neon-cyan" : "text-slate-200";
+    tone === "bull"
+      ? "text-bull"
+      : tone === "bear"
+        ? "text-bear"
+        : tone === "cyan"
+          ? "text-neon-cyan"
+          : tone === "amber"
+            ? "text-neon-amber"
+            : "text-slate-200";
   return (
     <div className="rounded-lg bg-white/[0.03] px-3 py-2">
       <div className="text-[10px] uppercase tracking-wider text-slate-500">{label}</div>

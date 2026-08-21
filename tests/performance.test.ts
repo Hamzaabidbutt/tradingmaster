@@ -88,6 +88,10 @@ function analysis(over: Partial<OutcomeAnalysis> = {}): OutcomeAnalysis {
       maxAdverseR: 0.3,
       maxFavourablePct: 3,
       maxAdversePct: 0.6,
+      // null by default: most cases here are about win rates and attribution,
+      // and the target-progress aggregate must be correct for rows that carry
+      // no figure. Tests that care pass one in.
+      targetProgressPct: null,
       bars: 12,
     },
     ...over,
@@ -345,7 +349,7 @@ describe("computePerformance — analyst-specific metrics", () => {
         ...LOSS,
         outcomeReason: "false_breakout" as OutcomeReason,
         verdicts: [verdict("candleClose", "long")],
-        outcomeAnalysis: analysis({ win: false, reason: "false_breakout", excursion: { maxFavourableR: 0.1, maxAdverseR: 1, maxFavourablePct: 0.2, maxAdversePct: 2, bars: 6 } }),
+        outcomeAnalysis: analysis({ win: false, reason: "false_breakout", excursion: { maxFavourableR: 0.1, maxAdverseR: 1, maxFavourablePct: 0.2, maxAdversePct: 2, targetProgressPct: null, bars: 6 } }),
       })),
       ...many(1, () => ({ ...LOSS, verdicts: [verdict("candleClose", "long")], outcomeAnalysis: analysis({ win: false }) })),
     ]);
@@ -410,6 +414,82 @@ describe("computePerformance — analyst-specific metrics", () => {
 /* ------------------------------------------------------------------ *
  * Degenerate input
  * ------------------------------------------------------------------ */
+
+describe("computePerformance — how close the losers got", () => {
+  /** A loser that got `pct` of the way to its first target. */
+  function loser(side: "BUY" | "SELL", pct: number | null): PerfSignal {
+    return sig({
+      ...LOSS,
+      side,
+      verdicts: [verdict("chart", side === "BUY" ? "long" : "short")],
+      outcomeAnalysis: analysis({
+        win: false,
+        reason: "failed_rejection",
+        excursion: {
+          maxFavourableR: 0.4,
+          maxAdverseR: 1,
+          maxFavourablePct: 0.8,
+          maxAdversePct: 2,
+          targetProgressPct: pct,
+          bars: 9,
+        },
+      }),
+    });
+  }
+
+  it("averages the distance covered, and splits it by direction", () => {
+    const report = computePerformance([
+      loser("BUY", 20),
+      loser("BUY", 40),
+      loser("SELL", 70),
+      loser("SELL", 90),
+    ]);
+    const p = report.overall.lossTargetProgress;
+    expect(p.all).toMatchObject({ meanPct: 55, sample: 4, bestPct: 90 });
+    // The split is the point: 30% on longs and 80% on shorts is a different
+    // system from one that does 55% on both, and the pooled mean hides it.
+    expect(p.long).toMatchObject({ meanPct: 30, sample: 2, bestPct: 40 });
+    expect(p.short).toMatchObject({ meanPct: 80, sample: 2, bestPct: 90 });
+  });
+
+  it("excludes winners, whose figure is ≥100% by construction", () => {
+    const report = computePerformance([
+      loser("BUY", 20),
+      sig({
+        ...WIN,
+        verdicts: [verdict("chart", "long")],
+        outcomeAnalysis: analysis({ excursion: { maxFavourableR: 2, maxAdverseR: 0.2, maxFavourablePct: 4, maxAdversePct: 0.4, targetProgressPct: 250, bars: 20 } }),
+      }),
+    ]);
+    // Pooling the 250 would report an average of 135% "approached before
+    // failing", which describes nothing that happened.
+    expect(report.overall.lossTargetProgress.all).toMatchObject({ meanPct: 20, sample: 1 });
+  });
+
+  it("withholds the mean rather than reporting 0 when no loser carries a figure", () => {
+    // Legacy rows: real losses, no stored excursion progress. `null` says "we
+    // do not know", `0` would say "price never moved" — a different claim.
+    const report = computePerformance([loser("BUY", null), loser("SELL", null)]);
+    expect(report.overall.lossTargetProgress.all).toEqual({ meanPct: null, sample: 0, bestPct: null });
+    expect(report.overall.failed).toBe(2);
+  });
+
+  it("counts only the losers that actually carry a figure in the sample", () => {
+    const report = computePerformance([loser("BUY", 50), loser("BUY", null), loser("BUY", 90)]);
+    // Three losses, two usable figures. The sample must say 2, not 3, or the
+    // mean would look better supported than it is.
+    expect(report.overall.failed).toBe(3);
+    expect(report.overall.lossTargetProgress.all).toMatchObject({ meanPct: 70, sample: 2 });
+  });
+
+  it("is empty, not zero, on an empty report", () => {
+    expect(computePerformance([]).overall.lossTargetProgress.all).toEqual({
+      meanPct: null,
+      sample: 0,
+      bestPct: null,
+    });
+  });
+});
 
 describe("computePerformance — empty and malformed input", () => {
   it("returns a usable empty report rather than NaN", () => {

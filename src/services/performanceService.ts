@@ -112,6 +112,21 @@ export interface AnalystPerformance {
   specific: LabelledMetric[];
 }
 
+/**
+ * How close signals got to their first target before failing.
+ *
+ * `meanPct` is null rather than 0 when nothing qualifies: "0 % of the way" is a
+ * claim about the market, "n/a" is a claim about the sample, and printing the
+ * former for the latter is the exact mistake `fmtMean` exists to prevent.
+ */
+export interface TargetProgressStat {
+  meanPct: number | null;
+  /** losing signals that carried a usable figure */
+  sample: number;
+  /** the closest any single loser came, as a share of the first target */
+  bestPct: number | null;
+}
+
 export interface OverallPerformance {
   totalSignals: number;
   successful: number;
@@ -125,6 +140,13 @@ export interface OverallPerformance {
   shortWinRate: number | null;
   avgProfitPct: number;
   avgLossPct: number;
+  /**
+   * How far losing signals travelled toward their first target, overall and
+   * split by direction. Split because a system that gets 80 % of the way on
+   * shorts and 20 % on longs is not the same system as one that averages 50 %
+   * on both, and the average alone would hide it.
+   */
+  lossTargetProgress: { all: TargetProgressStat; long: TargetProgressStat; short: TargetProgressStat };
   bestStrategy: { key: string; name: string; winRate: number; sample: number } | null;
   worstStrategy: { key: string; name: string; winRate: number; sample: number } | null;
 }
@@ -151,6 +173,26 @@ function rate(wins: number, total: number, min = MIN_SAMPLE): number | null {
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return Number((values.reduce((s, v) => s + v, 0) / values.length).toFixed(2));
+}
+
+/**
+ * How far a set of *losing* signals got toward their first target.
+ *
+ * Losers only, deliberately. On a winner the figure is ≥ 100 % by construction,
+ * so pooling the two would produce an average that answers no question anybody
+ * asked. Signals with no stored figure — legacy rows, or closes where the
+ * excursion fetch failed — are excluded rather than counted as zero, and the
+ * sample says how many the mean actually rests on.
+ */
+function lossTargetProgress(losses: PerfSignal[]): TargetProgressStat {
+  const values = losses
+    .map((s) => s.outcomeAnalysis?.excursion?.targetProgressPct)
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  return {
+    meanPct: values.length > 0 ? mean(values) : null,
+    sample: values.length,
+    bestPct: values.length > 0 ? Number(Math.max(...values).toFixed(1)) : null,
+  };
 }
 
 /**
@@ -244,7 +286,7 @@ function isContinuation(v: AnalystVerdict | undefined): boolean {
 function chartSpecific(supportedSignals: PerfSignal[]): LabelledMetric[] {
   const wins = supportedSignals.filter(isWin);
   const meanAnalogueMove = mean(
-    wins.map((s) => s.outcomeAnalysis?.excursion.maxFavourablePct ?? 0)
+    wins.map((s) => s.outcomeAnalysis?.excursion?.maxFavourablePct ?? 0)
   );
   const asTop = supportedSignals.filter((s) => s.outcomeAnalysis?.topContributor === "chart");
   return [
@@ -262,7 +304,7 @@ function candleCloseSpecific(supportedSignals: PerfSignal[]): LabelledMetric[] {
     (s) => (s.outcomeReason ?? s.outcomeAnalysis?.reason) === "false_breakout"
   ).length;
   const avgMove = mean(
-    supportedSignals.map((s) => s.outcomeAnalysis?.excursion.maxFavourablePct ?? 0)
+    supportedSignals.map((s) => s.outcomeAnalysis?.excursion?.maxFavourablePct ?? 0)
   );
   return [
     { label: "Confirmed breakouts traded", value: breakouts },
@@ -387,6 +429,11 @@ export function computePerformance(signals: PerfSignal[]): PerformanceReport {
       shortWinRate: rate(shorts.filter(isWin).length, shorts.length),
       avgProfitPct: mean(wins.map((s) => s.resultPnlPct ?? 0)),
       avgLossPct: mean(losses.map((s) => s.resultPnlPct ?? 0)),
+      lossTargetProgress: {
+        all: lossTargetProgress(losses),
+        long: lossTargetProgress(losses.filter((s) => s.side === "BUY")),
+        short: lossTargetProgress(losses.filter((s) => s.side === "SELL")),
+      },
       bestStrategy: rankable[0] ?? null,
       // null rather than a duplicate when only one analyst clears the bar:
       // "best and worst are the same thing" is not a finding.

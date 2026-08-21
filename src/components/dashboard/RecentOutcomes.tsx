@@ -85,6 +85,13 @@ export default function RecentOutcomes({ outcome }: { outcome: "successful" | "f
                           {analysis.excursion.maxAdverseR.toFixed(2)}R
                         </span>
                       )}
+                      {/* Only on the failure list: on a winner this figure is
+                          ≥100% by construction and says nothing. */}
+                      {!won && typeof analysis.excursion?.targetProgressPct === "number" && (
+                        <span className="text-neon-amber/70">
+                          approached {analysis.excursion.targetProgressPct.toFixed(0)}% of TP1
+                        </span>
+                      )}
                     </div>
                   )}
                 </button>

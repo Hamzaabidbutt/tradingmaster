@@ -119,6 +119,26 @@ function strategyOf(s: SignalRow): { generator: string; analysts: string[]; agai
 const TH = "px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500";
 const TD = "px-2 py-1.5 align-top";
 
+/**
+ * How close a signal got to its first target, as a sub-line under the reason.
+ *
+ * Shown on losers and withheld on winners. On a winner the figure is ≥ 100 % by
+ * construction and says nothing; on a loser it is the whole difference between
+ * "the read was nearly right and the stop was too tight" and "price went the
+ * other way immediately". Withheld — not shown as 0 % — when no figure was
+ * stored, because a legacy row and a signal that never moved are not the same
+ * fact. Identical for LONG and SHORT: both numerator and denominator are
+ * distances measured from the entry.
+ */
+function TargetProgress({ signal }: { signal: SignalRow }) {
+  const analysis = signal.outcomeAnalysis as OutcomeAnalysis | null;
+  const pct = analysis?.excursion?.targetProgressPct;
+  if (analysis?.win || typeof pct !== "number" || !Number.isFinite(pct)) return null;
+  return (
+    <span className="block text-[9px] text-neon-amber/70">approached {pct.toFixed(0)}% of TP1</span>
+  );
+}
+
 export default function SignalTable({
   signals,
   loading,
@@ -258,6 +278,7 @@ export default function SignalTable({
                   </td>
                   <td className={`${TD} max-w-[10rem] text-[10px] leading-relaxed text-slate-400`}>
                     {outcomeLabel(s.outcomeReason)}
+                    <TargetProgress signal={s} />
                   </td>
                 </tr>
                 {isOpen && (
@@ -415,14 +436,28 @@ function ExpandedRow({ signal, conditions }: { signal: SignalRow; conditions: st
                   value={analysis.analystsAbstained.map((a) => ANALYST_LABEL[a] ?? a).join(", ")}
                 />
               )}
-              <Detail
-                label="Post-entry movement"
-                value={`+${analysis.excursion.maxFavourableR.toFixed(2)}R / −${analysis.excursion.maxAdverseR.toFixed(2)}R over ${analysis.excursion.bars} bars`}
-              />
-              <Detail
-                label="Best / worst price"
-                value={`${fmtPct(analysis.excursion.maxFavourablePct)} / ${fmtPct(-Math.abs(analysis.excursion.maxAdversePct))}`}
-              />
+              {/* Guarded as a group: a signal closed before excursion tracking
+                  existed has an `outcomeAnalysis` with no `excursion` at all,
+                  and the type says otherwise because it describes what the
+                  engine writes today, not what old documents contain. */}
+              {analysis.excursion && (
+                <>
+                  <Detail
+                    label="Post-entry movement"
+                    value={`+${analysis.excursion.maxFavourableR.toFixed(2)}R / −${analysis.excursion.maxAdverseR.toFixed(2)}R over ${analysis.excursion.bars} bars`}
+                  />
+                  <Detail
+                    label="Best / worst price"
+                    value={`${fmtPct(analysis.excursion.maxFavourablePct)} / ${fmtPct(-Math.abs(analysis.excursion.maxAdversePct))}`}
+                  />
+                  {typeof analysis.excursion.targetProgressPct === "number" && (
+                    <Detail
+                      label={analysis.win ? "Distance to TP1 covered" : "Approached before failing"}
+                      value={`${analysis.excursion.targetProgressPct.toFixed(1)}% of entry → ${fmtPrice(signal.tp1)}`}
+                    />
+                  )}
+                </>
+              )}
             </dl>
           </div>
         )}
