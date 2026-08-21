@@ -1,140 +1,179 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
-import { GlassCard } from "@/components/ui/primitives";
-import { MARKETS } from "@/lib/config";
+import AnalystCards from "@/components/signals/AnalystCards";
+import FilterBar, {
+  EMPTY_FILTERS,
+  SignalFilters,
+  activeFilterCount,
+  filtersToQuery,
+} from "@/components/signals/FilterBar";
+import PerformanceStrip from "@/components/signals/PerformanceStrip";
+import SignalTable from "@/components/signals/SignalTable";
+import { usePerformance, useSignals } from "@/hooks/useDashboard";
 
-interface SignalRow {
-  id: string;
-  symbol: string;
-  timeframe: string;
-  side: "BUY" | "SELL";
-  entry: number;
-  stopLoss: number;
-  tp1: number;
-  tp2: number;
-  tp3: number;
-  riskReward: number;
-  confidence: number;
-  confidenceLabel: string;
-  status: string;
-  resultPnlPct: number | null;
-  reasoning: string[];
-  invalidation: string[];
-  createdAt: string;
-  closedAt: string | null;
+/**
+ * Signal History.
+ *
+ * Every signal the app has ever produced, what each analyst said at the time,
+ * and what actually happened. Four stacked layers, coarse to fine: the overall
+ * performance dashboard, the filters, the three analysts scored separately, then
+ * the signals themselves.
+ *
+ * Filters live in the URL rather than in component state alone, so a filtered
+ * view — "failed SHORT range setups on 4h in the last week" — is a link someone
+ * can send.
+ *
+ * The page reads statistics; it never writes them. Performance is derived from
+ * the signal rows on each request, so what the strip claims and what the table
+ * shows cannot disagree.
+ */
+
+const PAGE_SIZE = 60;
+/** `/api/signals` caps `limit` at 200. */
+const MAX_ROWS = 200;
+
+const KEYS: (keyof SignalFilters)[] = [
+  "symbol",
+  "analyst",
+  "source",
+  "side",
+  "outcome",
+  "timeframe",
+  "from",
+  "to",
+  "band",
+];
+
+function filtersFromParams(params: { get(key: string): string | null }): SignalFilters {
+  const out = { ...EMPTY_FILTERS };
+  for (const key of KEYS) out[key] = params.get(key) ?? "";
+  return out;
 }
 
-const STATUS_STYLE: Record<string, string> = {
-  ACTIVE: "bg-neon-cyan/10 text-neon-cyan border-neon-cyan/30",
-  TP1_HIT: "bg-bull/10 text-bull border-bull/30",
-  TP2_HIT: "bg-bull/10 text-bull border-bull/30",
-  TP3_HIT: "bg-bull/15 text-bull border-bull/40",
-  STOPPED: "bg-bear/10 text-bear border-bear/30",
-  EXPIRED: "bg-slate-500/10 text-slate-400 border-slate-500/30",
-};
+function paramsFromFilters(f: SignalFilters): string {
+  const q = new URLSearchParams();
+  for (const key of KEYS) if (f[key]) q.set(key, f[key]);
+  return q.toString();
+}
 
-export default function SignalsPage() {
-  const [signals, setSignals] = useState<SignalRow[]>([]);
-  const [filter, setFilter] = useState<string>("");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const q = filter ? `?symbol=${filter}&limit=50` : "?limit=50";
-        const res = await fetch(`/api/signals${q}`, { cache: "no-store" });
-        const data = await res.json();
-        setSignals(data.signals ?? []);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-    const t = setInterval(load, 15_000);
-    return () => clearInterval(t);
-  }, [filter]);
-
+export default function SignalHistoryPage() {
   return (
     <AppShell>
-      <div className="mx-auto max-w-5xl space-y-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-lg font-bold">Signal History</h1>
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="rounded-lg border border-white/10 bg-base-800 px-2.5 py-1.5 text-sm outline-none"
-          >
-            <option value="">All markets</option>
-            {MARKETS.map((m) => (
-              <option key={m.symbol} value={m.symbol}>{m.label}</option>
-            ))}
-          </select>
-        </div>
-
-        {loading && <p className="text-sm text-slate-500">Loading signals…</p>}
-        {!loading && signals.length === 0 && (
-          <GlassCard className="p-8 text-center">
-            <p className="text-sm text-slate-400">
-              No signals recorded yet. Signals persist automatically whenever the engine finds strong confluence —
-              keep the terminal running or start the background worker.
-            </p>
-          </GlassCard>
-        )}
-
-        {signals.map((s) => (
-          <GlassCard key={s.id} className="animate-fade-in">
-            <button className="w-full p-4 text-left" onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
-              <div className="flex flex-wrap items-center gap-3">
-                <span className={`rounded-md px-2 py-0.5 font-mono text-xs font-bold ${s.side === "BUY" ? "bg-bull/15 text-bull" : "bg-bear/15 text-bear"}`}>
-                  {s.side === "BUY" ? "▲ LONG" : "▼ SHORT"}
-                </span>
-                <span className="font-mono text-sm font-semibold">{s.symbol}</span>
-                <span className="font-mono text-xs text-slate-500">{s.timeframe}</span>
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLE[s.status] ?? STATUS_STYLE.EXPIRED}`}>
-                  {s.status.replace("_", " ")}
-                </span>
-                <span className="ml-auto font-mono text-xs text-slate-400">{s.confidence}% {s.confidenceLabel}</span>
-                {s.resultPnlPct != null && (
-                  <span className={`font-mono text-sm font-bold ${s.resultPnlPct > 0 ? "text-bull" : "text-bear"}`}>
-                    {s.resultPnlPct > 0 ? "+" : ""}{s.resultPnlPct.toFixed(2)}%
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[11px] text-slate-400 sm:grid-cols-6">
-                <span>E {s.entry}</span>
-                <span className="text-bear">SL {s.stopLoss}</span>
-                <span className="text-bull">T1 {s.tp1}</span>
-                <span className="text-bull">T2 {s.tp2}</span>
-                <span className="text-bull">T3 {s.tp3}</span>
-                <span>RR 1:{s.riskReward}</span>
-              </div>
-            </button>
-            {expanded === s.id && (
-              <div className="border-t border-white/5 p-4 text-xs">
-                <h4 className="mb-1 font-semibold uppercase tracking-wider text-slate-500">Reasoning</h4>
-                <ul className="mb-3 space-y-1">
-                  {(s.reasoning as string[]).map((r, i) => (
-                    <li key={i} className="text-slate-300">› {r}</li>
-                  ))}
-                </ul>
-                <h4 className="mb-1 font-semibold uppercase tracking-wider text-slate-500">Invalidation</h4>
-                <ul className="space-y-1">
-                  {(s.invalidation as string[]).map((r, i) => (
-                    <li key={i} className="text-slate-400">⚠ {r}</li>
-                  ))}
-                </ul>
-                <p className="mt-3 font-mono text-[10px] text-slate-600">
-                  Created {new Date(s.createdAt).toLocaleString()}
-                  {s.closedAt && ` · Closed ${new Date(s.closedAt).toLocaleString()}`}
-                </p>
-              </div>
-            )}
-          </GlassCard>
-        ))}
-      </div>
+      {/* `useSearchParams` needs a boundary — without it the prerender of this
+          statically-rendered route bails out. */}
+      <Suspense fallback={<p className="p-4 text-sm text-slate-500">Loading Signal History…</p>}>
+        <SignalHistory />
+      </Suspense>
     </AppShell>
+  );
+}
+
+function SignalHistory() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [filters, setFilters] = useState<SignalFilters>(() => filtersFromParams(searchParams));
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const query = useMemo(() => filtersToQuery(filters, limit), [filters, limit]);
+  const { data, error, loading, refresh } = useSignals(query);
+  const performance = usePerformance();
+
+  /**
+   * One writer for both the state and the URL. The URL is never read back into
+   * state after mount — a round trip would fight the user's own typing.
+   */
+  const apply = useCallback(
+    (next: SignalFilters) => {
+      setFilters(next);
+      setLimit(PAGE_SIZE);
+      setExpanded(null);
+      const qs = paramsFromFilters(next);
+      router.replace(qs ? `/signals?${qs}` : "/signals", { scroll: false });
+    },
+    [router],
+  );
+
+  const onChange = useCallback(
+    (patch: Partial<SignalFilters>) => apply({ ...filters, ...patch }),
+    [apply, filters],
+  );
+
+  const signals = data?.signals ?? [];
+  const canLoadMore = limit < MAX_ROWS && (data?.nextCursor != null || signals.length >= limit);
+
+  return (
+    <div className="space-y-3 p-3 md:p-4">
+      <header className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-bold text-slate-100">Signal History</h1>
+          <p className="text-[11px] text-slate-500">
+            Every signal, the verdict each analyst gave at the time, and what the market did next.
+          </p>
+        </div>
+        <button
+          onClick={refresh}
+          className="rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+        >
+          ↻ Refresh
+        </button>
+      </header>
+
+      <PerformanceStrip
+        report={performance.data}
+        loading={performance.loading}
+        error={performance.error}
+      />
+
+      <FilterBar
+        filters={filters}
+        onChange={onChange}
+        onReset={() => apply({ ...EMPTY_FILTERS })}
+        resultCount={data?.count ?? 0}
+        overFetched={data?.overFetched}
+      />
+
+      {performance.data && performance.data.analysts.length > 0 && (
+        <AnalystCards analysts={performance.data.analysts} />
+      )}
+
+      {data?.warning && (
+        <p className="glass px-3 py-2 text-[11px] text-neon-amber/85">
+          {data.warning} — the table below is empty because the signal store could not be reached,
+          not because no signals exist.
+        </p>
+      )}
+
+      <SignalTable
+        signals={signals}
+        loading={loading}
+        error={error}
+        expanded={expanded}
+        onExpand={setExpanded}
+      />
+
+      {canLoadMore && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => setLimit((n) => Math.min(n + PAGE_SIZE, MAX_ROWS))}
+            className="rounded-lg bg-white/5 px-3 py-1.5 text-[11px] text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+          >
+            Show more — {signals.length} of {limit} loaded
+          </button>
+        </div>
+      )}
+
+      {signals.length > 0 && (
+        <p className="text-center text-[10px] text-slate-600">
+          Click any row for the full explanation, each analyst&apos;s verdict at signal time, and the
+          outcome analysis.
+          {activeFilterCount(filters) === 0 &&
+            " Newest first, across every coin and timeframe the engine has traded."}
+        </p>
+      )}
+    </div>
   );
 }

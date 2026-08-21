@@ -114,6 +114,55 @@ export async function fetchTicker(symbol: string): Promise<TickerSnapshot> {
   return snap;
 }
 
+/**
+ * Every USDT-M perpetual's 24 h ticker in a single request.
+ *
+ * Omitting the `symbol` parameter returns all ~530 contracts for a weight of
+ * 40, versus 530 individual calls at weight 2 each. That difference is what
+ * makes a universe-wide scan viable at all: one call ranks the whole market by
+ * real traded volume, so the scanner knows what to look at before it fetches
+ * a single candle.
+ *
+ * Returned as a Map for O(1) joins against the symbol registry.
+ */
+export async function fetchAllTickers(): Promise<Map<string, TickerSnapshot>> {
+  const cacheKey = "ticker:all";
+  const cached = cacheGet<Map<string, TickerSnapshot>>(cacheKey);
+  if (cached) return cached;
+
+  const res = await fetch(`${FAPI}/fapi/v1/ticker/24hr`, { cache: "no-store" });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    logger.error("binance.tickers.failed", { status: res.status, detail: detail.slice(0, 200) });
+    throw new Error(
+      res.status === 451 || res.status === 403
+        ? `Binance blocked this server (HTTP ${res.status}) — the deployment region is geo-restricted.`
+        : `Binance all-tickers request failed: ${res.status}`
+    );
+  }
+  const raw = (await res.json()) as Record<string, string>[];
+  const map = new Map<string, TickerSnapshot>();
+  for (const t of raw) {
+    const quoteVolume = Number(t.quoteVolume);
+    // Skip contracts with no traded value: they cannot be ranked meaningfully
+    // and their candles are too sparse for any analyst to read.
+    if (!Number.isFinite(quoteVolume) || quoteVolume <= 0) continue;
+    map.set(t.symbol, {
+      symbol: t.symbol,
+      lastPrice: Number(t.lastPrice),
+      priceChangePercent: Number(t.priceChangePercent),
+      highPrice: Number(t.highPrice),
+      lowPrice: Number(t.lowPrice),
+      volume: Number(t.volume),
+      quoteVolume,
+    });
+  }
+  // 30s: long enough that a page load and the worker tick share one call,
+  // short enough that the ranking still reflects the current session.
+  cacheSet(cacheKey, map, 30_000);
+  return map;
+}
+
 export interface DepthSnapshot {
   bids: [number, number][];
   asks: [number, number][];
