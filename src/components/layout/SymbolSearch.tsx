@@ -18,9 +18,12 @@ const MAX_VISIBLE = 100;
 export default function SymbolSearch({
   symbol,
   onSelect,
+  placeholder = "Search coins…",
 }: {
   symbol: string;
   onSelect: (symbol: string) => void;
+  /** shown when `symbol` is empty — e.g. "All coins" when used as a filter */
+  placeholder?: string;
 }) {
   const { symbols, loading, labelFor } = useSymbols();
   const [open, setOpen] = useState(false);
@@ -127,8 +130,10 @@ export default function SymbolSearch({
           aria-autocomplete="list"
           aria-activedescendant={open && visible.length > 0 ? `symbol-opt-${active}` : undefined}
           aria-label="Search Binance USDT perpetuals"
-          value={open ? query : labelFor(symbol)}
-          placeholder="Search coins…"
+          // An empty `symbol` means "no coin chosen" (the filter case), which
+          // must read as the placeholder rather than as a bare "/USDT".
+          value={open ? query : symbol ? labelFor(symbol) : ""}
+          placeholder={placeholder}
           onFocus={() => setOpen(true)}
           onChange={(e) => {
             setQuery(e.target.value);

@@ -774,6 +774,102 @@ export interface RangeTradingResult {
   reason: string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * Confluence — where the three independent analysts agree
+ *
+ * The three analysts above each read the chart their own way. This layer
+ * asks a different question: do any of them independently point the same
+ * direction, and is that agreement worth acting on?
+ *
+ * Two deliberate properties, both enforced by the shapes below:
+ *   * LONG and SHORT are evaluated as separate, symmetric cases, so the
+ *     structure itself cannot be biased toward one side.
+ *   * NO_TRADE is a first-class decision, not a fallback — an analyst that
+ *     fails its quality gate abstains rather than casting a weak vote.
+ * ------------------------------------------------------------------ */
+
+/** Which analyst spoke, and what kind of evidence it is. */
+export type AnalystKey = "chart" | "candleClose" | "range";
+
+/**
+ * The class of evidence an analyst reads.
+ *
+ * Confluence is scored on the number of *distinct* bases that agree, not the
+ * number of analysts — two modules reading the same kind of evidence are
+ * closer to one opinion counted twice than to genuine confirmation.
+ */
+export type EvidenceBasis = "pattern_history" | "level_close" | "range_boundary";
+
+export type Direction = "long" | "short" | "none";
+
+/** One analyst's position on the current chart, captured at signal time. */
+export interface AnalystVerdict {
+  analyst: AnalystKey;
+  name: string;
+  basis: EvidenceBasis;
+  direction: Direction;
+  /** the analyst's own confidence, 0-100 */
+  confidence: number;
+  /** true when the analyst cleared its quality gate and may contribute */
+  qualified: boolean;
+  /** why it did or didn't qualify — shown, never hidden */
+  gate: string;
+  entry: number | null;
+  target: number | null;
+  invalidation: number | null;
+  /** one line built from this analyst's own numbers, never a template */
+  evidence: string;
+}
+
+/** The case for one direction, built independently of the other. */
+export interface DirectionalCase {
+  direction: "long" | "short";
+  /** 50-97; 50 means no evidence either way */
+  confidence: number;
+  /** pre-squash weighted sum of qualified supporters */
+  rawStrength: number;
+  /** distinct evidence bases supporting this direction */
+  independentBases: number;
+  /** multiplier applied for independent agreement */
+  independenceMultiplier: number;
+  supporters: AnalystVerdict[];
+  /** confidence points removed because qualified analysts pointed the other way */
+  disagreementPenalty: number;
+}
+
+export interface ConfluenceSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  generatedAt: number;
+  /** every analyst's verdict, including the ones that abstained */
+  verdicts: AnalystVerdict[];
+  long: DirectionalCase;
+  short: DirectionalCase;
+  decision: "LONG" | "SHORT" | "NO_TRADE";
+  /** the winning case's confidence, or the higher of the two on NO_TRADE */
+  confidence: number;
+  confidenceLabel: "Low" | "Moderate" | "High" | "Very High";
+  /** populated only when decision is NO_TRADE — which gate failed */
+  noTradeReason: string | null;
+  /** null on NO_TRADE: refusing to quote levels for a trade we won't take */
+  entry: number | null;
+  stopLoss: number | null;
+  target1: number | null;
+  target2: number | null;
+  riskReward: number | null;
+  disagreement: {
+    present: boolean;
+    note: string;
+    penaltyApplied: number;
+  };
+  /** how strong the agreement is, in words */
+  confluenceVerdict: "None" | "Single" | "Partial" | "Strong";
+  /** generated from the actual verdicts above — differs for every setup */
+  explanation: string[];
+  invalidation: string[];
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -781,8 +877,7 @@ export interface StrategyScore {
   score: number;
   weight: number;
   reasons: string[];
-}
-export interface TradeSetup {
+}export interface TradeSetup {
   side: "BUY" | "SELL";
   entry: number;
   stopLoss: number;
@@ -894,4 +989,56 @@ export interface BacktestMetrics {
   monthly: { month: string; pnlPct: number; trades: number }[];
   yearly: { year: string; pnlPct: number; trades: number }[];
   equityCurve: { time: number; equity: number }[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Signal outcome analysis
+ *
+ * Answers, after the fact, *why* a signal worked or didn't — and which
+ * analyst deserves the credit or the blame. The classification is
+ * deliberately coarse and explicit rather than a free-text guess, so the
+ * same reason can be counted across hundreds of signals.
+ * ------------------------------------------------------------------ */
+
+/** How far price actually travelled after entry, in risk multiples. */
+export interface Excursion {
+  /** best move in the signal's favour, as a multiple of initial risk */
+  maxFavourableR: number;
+  /** worst move against the signal, as a multiple of initial risk */
+  maxAdverseR: number;
+  maxFavourablePct: number;
+  maxAdversePct: number;
+  /** bars observed between entry and close */
+  bars: number;
+}
+
+export type OutcomeReason =
+  | "target_reached"
+  | "partial_target"
+  /** finished in profit without a target being hit (e.g. expired while up) */
+  | "closed_in_profit"
+  | "false_breakout"
+  | "failed_rejection"
+  | "range_invalidation"
+  | "weak_candle_close"
+  | "unexpected_reversal"
+  | "expired_no_move"
+  | "other";
+
+export interface OutcomeAnalysis {
+  win: boolean;
+  reason: OutcomeReason;
+  /** human-readable label for the reason */
+  reasonLabel: string;
+  /** narrative built from the actual numbers of this trade */
+  detail: string[];
+  /** which confirmation actually played out (success) or held up (failure) */
+  workingConfirmation: string | null;
+  /** the qualified analyst with the largest weighted contribution */
+  topContributor: AnalystKey | null;
+  analystsRight: AnalystKey[];
+  analystsWrong: AnalystKey[];
+  /** analysts that abstained and were vindicated by a loss */
+  analystsAbstained: AnalystKey[];
+  excursion: Excursion;
 }
