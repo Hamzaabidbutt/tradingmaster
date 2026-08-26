@@ -78,8 +78,12 @@ export default function DashboardPage() {
         </div>
 
         {/* 7 & 8 — the track record, wins and losses given equal room. */}
-        <div className="grid gap-3 lg:grid-cols-2">
+        {/* Three buckets, not two: a call that reached TP1 and then reversed
+            was right about direction, and burying it under "failed" hides the
+            difference between a bad read and a bad exit. */}
+        <div className="grid gap-3 lg:grid-cols-3">
           <RecentOutcomes outcome="successful" />
+          <RecentOutcomes outcome="partial" />
           <RecentOutcomes outcome="failed" />
         </div>
       </div>

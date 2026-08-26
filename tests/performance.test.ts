@@ -531,3 +531,57 @@ describe("parseVerdicts", () => {
     expect(parseVerdicts([good, null, 42, { analyst: "range" }])).toEqual([good]);
   });
 });
+
+describe("partial successes", () => {
+  /** A red trade that nonetheless tagged its first target. */
+  const partial = (over: Partial<PerfSignal> = {}) =>
+    sig({
+      ...LOSS,
+      outcomeAnalysis: analysis({ win: false, excursion: { ...analysis().excursion, targetProgressPct: 118 } }),
+      ...over,
+    });
+
+  it("keeps partials out of both the win count and the failure count", () => {
+    const report = computePerformance([sig(WIN), sig(LOSS), partial()]);
+    const o = report.overall;
+    expect(o.successful).toBe(1);
+    expect(o.partials).toBe(1);
+    expect(o.failed).toBe(1);
+    // The three buckets account for every closed signal, with none counted twice.
+    expect(o.successful + o.partials + o.failed).toBe(3);
+  });
+
+  it("does not flatter the win rate with partials", () => {
+    // 5 wins, 5 partials, 10 outright failures — comfortably past the sample
+    // floor, so the rate is published rather than withheld.
+    const report = computePerformance([
+      ...many(5, () => WIN),
+      ...Array.from({ length: 5 }, () => partial()),
+      ...many(10, () => LOSS),
+    ]);
+    expect(report.overall.winRate).toBe(25);
+    // Half credit for each partial: (5 + 2.5) / 20.
+    expect(report.overall.weightedAccuracy).toBeCloseTo(37.5, 1);
+  });
+
+  it("counts a loss that never reached TP1 as an outright failure", () => {
+    const nearMiss = sig({
+      ...LOSS,
+      outcomeAnalysis: analysis({ win: false, excursion: { ...analysis().excursion, targetProgressPct: 87 } }),
+    });
+    const report = computePerformance([nearMiss]);
+    expect(report.overall.partials).toBe(0);
+    expect(report.overall.failed).toBe(1);
+  });
+
+  it("attributes partials to the analysts that voted for the signal", () => {
+    const report = computePerformance([
+      partial({ verdicts: [verdict("chart", "long"), abstains("range")] }),
+    ]);
+    expect(analystOf(report, "chart").partials).toBe(1);
+    expect(analystOf(report, "chart").weightedAccuracy).toBe(50);
+    // The analyst that abstained is charged neither the loss nor the partial.
+    expect(analystOf(report, "range").partials).toBe(0);
+    expect(analystOf(report, "range").totalSignals).toBe(0);
+  });
+});

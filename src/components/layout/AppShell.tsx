@@ -10,6 +10,8 @@ import { MARKETS } from "@/lib/config";
 const NAV = [
   { href: "/", label: "Dashboard", icon: "🔥" },
   { href: "/terminal", label: "Terminal", icon: "◉" },
+  { href: "/reversals", label: "Zone Reversals", icon: "🧱" },
+  { href: "/liquidations", label: "Liquidation Spikes", icon: "💥" },
   { href: "/signals", label: "Signal History", icon: "⚡" },
   { href: "/strategies", label: "Strategies", icon: "🧠" },
   { href: "/backtest", label: "Backtest", icon: "⏱" },
@@ -20,6 +22,8 @@ const NAV = [
 /** Mobile bottom nav has ~44px per item — the full labels do not fit. */
 const SHORT_LABEL: Record<string, string> = {
   "/": "Setups",
+  "/reversals": "Zones",
+  "/liquidations": "Liqs",
   "/signals": "History",
   "/strategies": "Strats",
 };
@@ -121,14 +125,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex justify-around border-t border-white/10 bg-base-900/90 py-2 backdrop-blur-xl md:hidden">
+      {/* Nine entries no longer fit a phone width evenly, so the row scrolls
+          rather than crushing every label to two letters. */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-1 overflow-x-auto border-t border-white/10 bg-base-900/90 px-2 py-2 backdrop-blur-xl md:hidden">
         {NAV.map((item) => {
           const active = pathname === item.href;
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={`flex flex-col items-center gap-0.5 px-1.5 text-[9px] ${
+              className={`flex shrink-0 flex-col items-center gap-0.5 px-2 text-[9px] ${
                 active ? "text-neon-cyan" : "text-slate-500"
               }`}
             >

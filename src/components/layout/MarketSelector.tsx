@@ -24,6 +24,8 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "liquidity", label: "LIQ", title: "Buy/sell-side liquidity and sweeps" },
       { key: "equalLevels", label: "EQH/L", title: "Equal highs & lows connected with lines" },
       { key: "supportResistance", label: "S/R", title: "Scored support & resistance levels" },
+      { key: "buyWalls", label: "BID WALL", title: "Large resting bid clusters from the live order book — where a decline runs into size" },
+      { key: "sellWalls", label: "ASK WALL", title: "Large resting ask clusters from the live order book — supply that must be absorbed" },
     ],
   },
   {
@@ -38,6 +40,7 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "cvd", label: "CVD", title: "Cumulative volume delta line" },
       { key: "orderFlowEvents", label: "ABS", title: "Absorption, exhaustion & trapped-trader markers" },
       { key: "bigTrades", label: "BIG", title: "Large-order bubbles" },
+      { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
     ],
   },
   {

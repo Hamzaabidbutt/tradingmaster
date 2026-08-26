@@ -162,6 +162,7 @@ export default function FilterBar({
             <option value="">Any outcome</option>
             <option value="active">Active</option>
             <option value="successful">Successful</option>
+            <option value="partial">Partial — reached TP1</option>
             <option value="failed">Failed</option>
             <option value="expired">Expired</option>
           </select>

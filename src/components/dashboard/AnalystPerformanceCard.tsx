@@ -74,6 +74,14 @@ export default function AnalystPerformanceCard() {
                 >
                   avg {fmtMean(a.avgReturnPct, a.totalSignals)}
                 </span>
+                {a.partials > 0 && (
+                  <span
+                    className="text-neon-amber/80"
+                    title="Reached the first target, then closed at or below breakeven. Counted at half credit in weighted accuracy."
+                  >
+                    {a.partials} partial · wtd {a.weightedAccuracy.toFixed(0)}%
+                  </span>
+                )}
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-slate-600">
                 {a.bestTimeframe && (

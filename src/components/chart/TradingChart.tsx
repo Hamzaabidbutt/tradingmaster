@@ -15,7 +15,7 @@ import {
   UTCTimestamp,
   createChart,
 } from "lightweight-charts";
-import { Candle, FullAnalysis } from "@/engines/types";
+import { Candle, FullAnalysis, OrderWallResult } from "@/engines/types";
 import { OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
@@ -33,6 +33,8 @@ interface Props {
   /** live countdown until the in-progress candle closes */
   countdown?: string;
   livePrice?: number | null;
+  /** resting order-book walls; null when both wall overlays are off */
+  walls?: OrderWallResult | null;
 }
 
 const BULL = "#00e5a0";
@@ -60,6 +62,7 @@ export default function TradingChart({
   datasetKey,
   countdown,
   livePrice,
+  walls,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -71,6 +74,12 @@ export default function TradingChart({
   const cvdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  /**
+   * Wall lines are held apart from `priceLinesRef` because they refresh on a
+   * different clock: the analysis effect reruns every 8 s, the book every 6 s,
+   * and sharing one array means whichever fires second wipes the other's lines.
+   */
+  const wallLinesRef = useRef<IPriceLine[]>([]);
   const [ready, setReady] = useState(false);
 
   /** Dataset currently loaded into the series — guards incremental updates. */
@@ -94,8 +103,11 @@ export default function TradingChart({
   const rafRef = useRef<number | null>(null);
   /** Y position (px) of the live price, for the countdown badge. */
   const [badgeY, setBadgeY] = useState<number | null>(null);
-  /** Timestamp of the candle the user clicked, if any. */
-  const [selectedTime, setSelectedTime] = useState<number | null>(null);
+  /** Timestamp of the candle under the cursor, if any. */
+  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
+  /** Mirrors hoveredTime without re-rendering, so the crosshair handler can
+   *  compare cheaply and only call setState when the bar actually changes. */
+  const hoveredTimeRef = useRef<number | null>(null);
 
   /** How many numeric rows are switched on (reserves space at the bottom). */
   const numericRows =
@@ -228,34 +240,43 @@ export default function TradingChart({
     };
   }, [ready, candles.length]);
 
-  // --- Click to inspect a candle ---
+  // --- Hover to inspect a candle ---
+  //
+  // Crosshair events fire on every mouse move, so the handler compares
+  // against a ref and only touches React state when the hovered BAR changes.
+  // Without that guard a slow drag across one candle would re-render the
+  // whole chart tree dozens of times per second.
   useEffect(() => {
     const chart = chartRef.current;
     if (!ready || !chart) return;
-    const onClick = (param: { time?: unknown }) => {
-      // Clicking empty space (outside any bar) clears the selection.
-      if (param.time == null) {
-        setSelectedTime(null);
-        return;
-      }
-      setSelectedTime(Number(param.time));
+    const onMove = (param: { time?: unknown }) => {
+      const next = param.time == null ? null : Number(param.time);
+      if (next === hoveredTimeRef.current) return;
+      hoveredTimeRef.current = next;
+      setHoveredTime(next);
     };
-    chart.subscribeClick(onClick);
+    chart.subscribeCrosshairMove(onMove);
     return () => {
       if (disposedRef.current) return;
-      try { chart.unsubscribeClick(onClick); } catch { /* disposed */ }
+      try { chart.unsubscribeCrosshairMove(onMove); } catch { /* disposed */ }
     };
   }, [ready]);
 
-  // Selecting a different symbol/timeframe invalidates the selection.
-  useEffect(() => { setSelectedTime(null); }, [datasetKey]);
+  // Switching symbol/timeframe invalidates whatever was hovered.
+  useEffect(() => {
+    hoveredTimeRef.current = null;
+    setHoveredTime(null);
+  }, [datasetKey]);
 
-  const selectedStats: CandleStats | null = useMemo(() => {
-    if (selectedTime == null || candles.length === 0) return null;
-    const candle = candleAtTime(candles, selectedTime);
+  const inspectorStats: CandleStats | null = useMemo(() => {
+    if (candles.length === 0) return null;
+    // With the cursor off the chart, show the newest bar — the same thing
+    // Binance does, so the panel is never blank while the market moves.
+    const candle =
+      hoveredTime == null ? candles[candles.length - 1] : candleAtTime(candles, hoveredTime);
     if (!candle) return null;
     return computeCandleStats(candle, candles, analysis);
-  }, [selectedTime, candles, analysis]);
+  }, [hoveredTime, candles, analysis]);
 
   // --- Data feed (incremental: a refetch must never reset the view) ---
   useEffect(() => {
@@ -664,6 +685,62 @@ export default function TradingChart({
     };
   }, [ready, analysis, overlays]);
 
+  // --- Price lines: resting order-book walls ---
+  // Separate effect, separate line array: the book updates on its own poll and
+  // must not be tied to the analysis refresh, or walls would sit stale for
+  // seconds at a time while the depth behind them had already moved.
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!ready || !series || disposedRef.current) return;
+
+    for (const pl of wallLinesRef.current) {
+      try { series.removePriceLine(pl); } catch { /* disposed */ }
+    }
+    wallLinesRef.current = [];
+
+    if (walls) {
+      const add = (price: number, color: string, title: string) => {
+        if (!Number.isFinite(price)) return;
+        try {
+          wallLinesRef.current.push(
+            series.createPriceLine({
+              price,
+              color,
+              title,
+              lineStyle: LineStyle.Solid,
+              lineWidth: 2,
+              axisLabelVisible: true,
+            })
+          );
+        } catch {
+          /* disposed */
+        }
+      };
+      // Line opacity tracks how far the cluster stands above the average level
+      // size, so a 20× wall reads differently at a glance from a 4× one.
+      const alpha = (multiple: number) => Math.min(0.9, 0.35 + multiple / 25);
+      if (overlays.buyWalls) {
+        for (const w of walls.bids) {
+          add(w.price, `rgba(0,229,160,${alpha(w.multiple).toFixed(2)})`, `BID ${w.multiple.toFixed(1)}×`);
+        }
+      }
+      if (overlays.sellWalls) {
+        for (const w of walls.asks) {
+          add(w.price, `rgba(255,77,109,${alpha(w.multiple).toFixed(2)})`, `ASK ${w.multiple.toFixed(1)}×`);
+        }
+      }
+    }
+
+    return () => {
+      if (!disposedRef.current) {
+        for (const pl of wallLinesRef.current) {
+          try { series.removePriceLine(pl); } catch { /* series disposed */ }
+        }
+      }
+      wallLinesRef.current = [];
+    };
+  }, [ready, walls, overlays.buyWalls, overlays.sellWalls]);
+
   // --- Overlay canvas: zones, profile, fib, equal levels, numeric rows ---
   useEffect(() => {
     const chart = chartRef.current;
@@ -1019,11 +1096,11 @@ export default function TradingChart({
       <div ref={containerRef} className="h-full w-full" />
       <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
 
-      {selectedStats && (
+      {overlays.candleInspector && inspectorStats && (
         <CandleInspector
-          stats={selectedStats}
+          live={hoveredTime == null}
+          stats={inspectorStats}
           pricePrecision={pricePrecision}
-          onClose={() => setSelectedTime(null)}
         />
       )}
 

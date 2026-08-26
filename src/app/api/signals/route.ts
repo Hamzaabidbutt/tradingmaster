@@ -5,6 +5,7 @@ import { parseVerdicts } from "@/services/performanceService";
 import { refreshOpenSignalsInBackground } from "@/services/signalLifecycle";
 import { computeLiveProgress } from "@/engines/signalProgress";
 import { fetchTicker } from "@/lib/binance";
+import { ACTIVE_STATUSES, RESOLVED_STATUSES, classifyBucket } from "@/engines/outcomeBuckets";
 
 export const dynamic = "force-dynamic";
 
@@ -29,14 +30,12 @@ export const dynamic = "force-dynamic";
  * filters and the dashboard counts always agree.
  */
 
-const ACTIVE_STATUSES = ["ACTIVE", "TP1_HIT", "TP2_HIT"] as const;
-/** Statuses that end a signal and carry a realised P/L. */
-const RESOLVED_STATUSES = ["TP3_HIT", "STOPPED", "EXPIRED"] as const;
-
-type Outcome = "active" | "successful" | "failed" | "expired";
+type Outcome = "active" | "successful" | "partial" | "failed" | "expired";
 
 function isOutcome(v: string | null): v is Outcome {
-  return v === "active" || v === "successful" || v === "failed" || v === "expired";
+  return (
+    v === "active" || v === "successful" || v === "partial" || v === "failed" || v === "expired"
+  );
 }
 
 export async function GET(req: NextRequest) {
@@ -66,7 +65,7 @@ export async function GET(req: NextRequest) {
   const statusFilter: Prisma.SignalWhereInput = outcome
     ? outcome === "active"
       ? { status: { in: [...ACTIVE_STATUSES] } }
-      : outcome === "successful" || outcome === "failed"
+      : outcome === "successful" || outcome === "failed" || outcome === "partial"
         ? { status: { in: [...RESOLVED_STATUSES] } }
         : { status: "EXPIRED" }
     : status
@@ -101,7 +100,8 @@ export async function GET(req: NextRequest) {
 
   // Post-query filters need headroom; without one, filtering a full page down
   // would silently return fewer rows than asked for.
-  const needsPostFilter = Boolean(analyst) || outcome === "successful" || outcome === "failed";
+  const needsPostFilter =
+    Boolean(analyst) || outcome === "successful" || outcome === "failed" || outcome === "partial";
   const take = needsPostFilter ? Math.min(600, limit * 6) : limit;
 
   try {
@@ -114,12 +114,19 @@ export async function GET(req: NextRequest) {
 
     let signals = rows;
 
-    if (outcome === "successful") {
-      signals = signals.filter((s) => (s.resultPnlPct ?? 0) > 0);
-    } else if (outcome === "failed") {
-      // A signal that tagged a target and then reversed into a net loss is a
-      // failure, whatever its status says — the P/L is the ground truth.
-      signals = signals.filter((s) => (s.resultPnlPct ?? 0) <= 0);
+    if (outcome === "successful" || outcome === "failed" || outcome === "partial") {
+      // Buckets come from the shared classifier so History, the performance
+      // service and the dashboard can never disagree about what a signal was.
+      // Note `failed` now EXCLUDES trades that reached TP1 before reversing —
+      // those are `partial`.
+      signals = signals.filter(
+        (s) =>
+          classifyBucket({
+            status: s.status,
+            resultPnlPct: s.resultPnlPct,
+            outcomeAnalysis: s.outcomeAnalysis as never,
+          }) === outcome
+      );
     }
 
     if (analyst) {

@@ -67,3 +67,27 @@ export async function fetchTickersDirect(): Promise<DirectTicker[]> {
       quoteVolume: Number(t.quoteVolume),
     }));
 }
+
+export interface DirectDepth {
+  bids: [number, number][];
+  asks: [number, number][];
+}
+
+/**
+ * Order book snapshot, fetched from the browser.
+ *
+ * The walls panel is the one place where a geo-blocked server is most
+ * visible: everything else degrades to stale, but resting depth is
+ * meaningless if it is not current. So the same fallback applies here.
+ */
+export async function fetchDepthDirect(symbol: string, limit = 500): Promise<DirectDepth> {
+  const res = await fetch(`${FAPI}/fapi/v1/depth?symbol=${symbol}&limit=${limit}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Binance depth ${res.status}`);
+  const d = (await res.json()) as { bids: string[][]; asks: string[][] };
+  return {
+    bids: d.bids.map((b) => [Number(b[0]), Number(b[1])] as [number, number]),
+    asks: d.asks.map((a) => [Number(a[0]), Number(a[1])] as [number, number]),
+  };
+}

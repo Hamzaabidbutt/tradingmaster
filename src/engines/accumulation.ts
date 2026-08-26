@@ -5,6 +5,7 @@ import { analyzeMarketStructure } from "./marketStructure";
 import { detectOrderFlowEvents } from "./orderFlowEvents";
 import { analyzePremiumDiscount } from "./premiumDiscount";
 import { detectSupportResistance } from "./supportResistance";
+import { analyzeLiquidationDelta } from "./liquidationDelta";
 import { AccumulationCriterion, AccumulationSetup, Candle } from "./types";
 import { buildVolumeProfile } from "./volumeProfile";
 
@@ -23,7 +24,8 @@ import { buildVolumeProfile } from "./volumeProfile";
  *   4. absorption at the level — heavy selling that failed to move price
  *   5. an accumulation-shaped profile (b-shape at the lows, or a range with
  *      cumulative delta rising while price goes nowhere)
- *   6. price at a discount rather than already extended
+ *   6. a liquidation delta spike into the base — forced selling exhausting
+ *   7. price at a discount rather than already extended
  *
  * Criteria 1 and 2 are mandatory. Without a level being defended and buyers
  * paying up for it, everything else is a coin that merely stopped falling —
@@ -33,7 +35,7 @@ import { buildVolumeProfile } from "./volumeProfile";
 
 /** Criteria that must be present for any qualification at all. */
 const REQUIRED = ["base", "positive_delta"] as const;
-const QUALIFY_SCORE = 62;
+const QUALIFY_SCORE = 66;
 
 export function detectAccumulation(
   symbol: string,
@@ -50,6 +52,7 @@ export function detectAccumulation(
   const footprint = buildFootprint(candles, null, { count: 12 });
   const events = detectOrderFlowEvents(candles, footprint, profile, srLevels);
   const pd = analyzePremiumDiscount(candles, structure.swings);
+  const liqDelta = analyzeLiquidationDelta(candles);
 
   const criteria: AccumulationCriterion[] = [];
 
@@ -146,7 +149,43 @@ export function detectAccumulation(
         : "Profile shows no accumulation signature; volume is not concentrating at the lows.",
   });
 
-  /* ---- 6. Discount location ---- */
+  /* ---- 6. Liquidation delta spike into the base ---- */
+  // A burst of forced long liquidation near the low is the seller side being
+  // *made* to sell rather than choosing to. That supply is finite and, once
+  // cleared, removes the pressure that was holding price down — which is why
+  // capitulation spikes so often mark the end of a decline rather than the
+  // middle of one.
+  const liqWindow = liqDelta.series.slice(-15);
+  const longFlush = liqWindow.filter((p) => p.longLiquidated > 0);
+  const flushTotal = longFlush.reduce((s, p) => s + p.longLiquidated, 0);
+  const peakFlush = longFlush.length > 0 ? Math.max(...longFlush.map((p) => p.longLiquidated)) : 0;
+  // Near the low of the analysed window = the flush happened at the base,
+  // not somewhere on the way down.
+  const windowLow = Math.min(...candles.slice(-liqWindow.length || -15).map((c) => c.low));
+  const flushBar = longFlush.length > 0
+    ? candles.find((c) => c.time === longFlush.reduce((a, b) => (a.longLiquidated >= b.longLiquidated ? a : b)).time)
+    : undefined;
+  const flushAtBase = flushBar ? (flushBar.low - windowLow) / Math.max(windowLow, 1e-9) < 0.02 : false;
+  // Reclaimed = price closed back above the flush bar's midpoint since.
+  const reclaimed = flushBar
+    ? price > (flushBar.high + flushBar.low) / 2
+    : false;
+
+  const spikeMet = flushTotal > 0 && peakFlush > 0 && flushAtBase;
+  criteria.push({
+    key: "liquidation_spike",
+    label: "Liquidation delta spike",
+    met: spikeMet,
+    weight: 14,
+    score: spikeMet ? (reclaimed ? 14 : 8) : 0,
+    detail: spikeMet
+      ? `Forced long liquidation spiked into the base${flushBar ? ` at ${flushBar.low.toFixed(6).replace(/0+$/, "")}` : ""} — the selling there was mechanical, not discretionary.${reclaimed ? " Price has since reclaimed the flush, so that supply is spent." : " Price has not yet reclaimed the flush, so the cascade may not be finished."}`
+      : longFlush.length > 0
+        ? "Forced liquidation is present but not concentrated at the low — the flush happened on the way down rather than at the base, which does not mark exhaustion."
+        : "No liquidation delta spike detected; any selling here is discretionary, so there is no forced supply about to run out.",
+  });
+
+  /* ---- 7. Discount location ---- */
   const atDiscount = pd.currentZone === "discount";
   criteria.push({
     key: "discount",

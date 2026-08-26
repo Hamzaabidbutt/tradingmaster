@@ -13,17 +13,23 @@ import { OutcomeAnalysis } from "@/engines/types";
  * classified reason and who was right or wrong, which is the whole point of
  * recording outcomes rather than just P/L.
  */
-export default function RecentOutcomes({ outcome }: { outcome: "successful" | "failed" }) {
+export default function RecentOutcomes({ outcome }: { outcome: "successful" | "partial" | "failed" }) {
   const { data, loading, error } = useSignals(`outcome=${outcome}&limit=8`, 30_000);
   const open = useOpenInTerminal();
   const signals = data?.signals ?? [];
   const won = outcome === "successful";
+  const partial = outcome === "partial";
+  const tone = won ? "text-bull" : partial ? "text-neon-amber" : "text-bear";
 
   return (
     <GlassCard
       title={
-        <span className={won ? "text-bull" : "text-bear"}>
-          {won ? "Recent Successful Signals" : "Recent Failed Signals"}
+        <span className={tone}>
+          {won
+            ? "Recent Successful Signals"
+            : partial
+              ? "Recent Partial Signals"
+              : "Recent Failed Signals"}
         </span>
       }
       action={<span className="font-mono text-[10px] text-slate-500">{signals.length} shown</span>}
@@ -34,7 +40,9 @@ export default function RecentOutcomes({ outcome }: { outcome: "successful" | "f
             ? "Loading…"
             : error || data?.warning
               ? `Unavailable — ${error ?? data?.warning}.`
-              : `No ${won ? "winning" : "losing"} signals have resolved yet.`}
+              : partial
+                ? "No signals have reached TP1 and then reversed. Trades either finished green or never got there."
+                : `No ${won ? "winning" : "losing"} signals have resolved yet.`}
         </EmptyNote>
       ) : (
         <ul className="divide-y divide-white/5">

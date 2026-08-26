@@ -20,6 +20,8 @@ import CandleCloseExpansionPanel from "@/components/panels/CandleCloseExpansionP
 import RangeTradingPanel from "@/components/panels/RangeTradingPanel";
 import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
+import { useOrderWalls } from "@/hooks/useOrderWalls";
+import OrderWallStrip from "@/components/chart/OrderWallStrip";
 import { useCandleCountdown } from "@/hooks/useCandleCountdown";
 import { useSymbols } from "@/hooks/useSymbols";
 import { useMarketStore } from "@/stores/marketStore";
@@ -43,6 +45,11 @@ export default function TerminalPage() {
   const pricePrecision = precisionFor(symbol);
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
+  // The book is only polled while at least one wall overlay is on.
+  const { walls, error: wallError } = useOrderWalls(
+    symbol,
+    overlays.buyWalls || overlays.sellWalls
+  );
   const [candles, setCandles] = useState<Candle[]>([]);
   const { formatted } = useCandleCountdown(timeframe, candles[candles.length - 1]?.time);
   /** Where chart candles came from — surfaced so a degraded feed is visible. */
@@ -132,6 +139,13 @@ export default function TerminalPage() {
               {feedError}
             </div>
           )}
+          <OrderWallStrip
+            walls={walls}
+            showBids={overlays.buyWalls}
+            showAsks={overlays.sellWalls}
+            precision={pricePrecision}
+            error={wallError}
+          />
           <div className="min-h-0 flex-1">
             <TradingChart
               candles={candles}
@@ -142,6 +156,7 @@ export default function TerminalPage() {
               datasetKey={`${symbol}:${timeframe}`}
               countdown={formatted}
               livePrice={price}
+              walls={walls}
             />
           </div>
         </div>
