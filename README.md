@@ -38,7 +38,7 @@ Built with **Next.js 14 (App Router) + TypeScript + MySQL (Prisma) + Tailwind + 
 | **Backtesting** | Walk-forward, no lookahead, pessimistic intrabar resolution. Win rate, profit factor, max DD, Sharpe, streaks, avg RR, monthly/yearly buckets, equity curve; per-strategy isolation and comparison. |
 | **Learning engine** | Every closed signal produces an immutable `LearningRecord`; strategy weights adjust (bounded, small learning rate) toward strategies that were right. History is never deleted. |
 | **Analytics** | Real measured win rates (today/week/month/all-time), per-strategy accuracy, best/worst strategy — **never a hardcoded accuracy claim**. |
-| **Alerts** | Browser notifications, Telegram, Discord, generic webhooks (env-configured) + per-user webhook channels. |
+| **Alerts** | Browser notifications, Telegram, Discord, generic webhooks (env-configured) + per-user webhook channels. **Liquidation-spike alerts** push forced flow printing at an extreme straight to your phone — gated, deduplicated per spike and rate-limited per symbol (see below). |
 | **Security** | JWT httpOnly sessions, bcrypt, RBAC (ADMIN/ANALYST/VIEWER), zod input validation, per-IP rate limiting (middleware + per-route), audit log, security headers. |
 
 ## Architecture
@@ -103,6 +103,74 @@ persistence, learning, analytics and auth. The first registered account becomes 
 > As a safety net the UI falls back to fetching klines and tickers **directly from the visitor's
 > browser** when the server route fails, and shows a banner saying so. That keeps the chart alive,
 > but the server-side analysis panels still require a server that can reach Binance.
+
+## Liquidation-spike alerts
+
+Forced flow is price-insensitive — a margin engine closes because collateral ran out, not because it
+has a view — so it is finite by construction. When it lands at the extreme of a move and price holds,
+the pressure that made the extreme has been spent. These alerts fire on exactly that: a spike **at an
+extreme**, with a forced signature, that has **already begun reversing**.
+
+### Setup
+
+```bash
+# 1. Create a bot with @BotFather in Telegram, then message your new bot once.
+# 2. Find your chat id:  https://api.telegram.org/bot<TOKEN>/getUpdates
+TELEGRAM_BOT_TOKEN="123456:ABC..."
+TELEGRAM_CHAT_ID="987654321"
+
+# 3. Secret for the scheduled endpoint. Without it the route stays disabled.
+CRON_SECRET="$(openssl rand -base64 32)"
+APP_URL="https://your-app.vercel.app"   # used for the link inside each alert
+```
+
+Then apply the schema (`SentAlert` is new) and check the gate before pointing it at a live channel:
+
+```bash
+npm run db:push
+curl "$APP_URL/api/alerts/liquidations?dry=1&secret=$CRON_SECRET"
+```
+
+`dry=1` evaluates and reports without sending or recording anything.
+
+### Running it on a schedule
+
+Something has to call the endpoint; the app is serverless and nothing runs between page loads.
+
+| Option | Granularity | Notes |
+| --- | --- | --- |
+| `npm run worker` | `LIQ_ALERT_INTERVAL_SEC` (default 300s) | Best. Already in the repo, needs an always-on host (Railway/Fly/Render/VPS). |
+| Vercel Cron | 1 min on **Pro**, once a day on Hobby | Add a `crons` entry to `vercel.json`; Vercel sends `CRON_SECRET` as a bearer token automatically. |
+| GitHub Actions / cron-job.org | ~5 min | Works on Hobby. Actions cron can drift by several minutes under load. |
+
+### Tuning
+
+Every threshold is an env var (see `.env.example`). The defaults are deliberately strict, because an
+alerter that fires a hundred times a day gets muted and is then worse than no alerts at all:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `LIQ_ALERT_TIMEFRAME` | `5m` | Also the floor latency — see below. |
+| `LIQ_ALERT_MIN_SCORE` | `70` | Raise for fewer, stronger alerts. |
+| `LIQ_ALERT_MAX_BARS_AGO` | `3` | Older spikes are history, not an entry. |
+| `LIQ_ALERT_MIN_REVERSAL_PCT` | `0.4` | Requires the turn to have started. |
+| `LIQ_ALERT_MAX_PER_RUN` | `5` | Caps a violent session. |
+| `LIQ_ALERT_COOLDOWN_MIN` | `45` | Per symbol, so one coin cannot spam. |
+
+Each spike alerts **once**: the dedupe key is built from the spike bar's own timestamp and enforced
+by a unique index, so re-reading the same candles on the next sweep sends nothing.
+
+### What this cannot do (yet)
+
+Spikes are detected from **closed candles**, so an alert is inherently up to one bar behind — on the
+5m default, up to ~5 minutes, plus whatever your scheduler adds. Every message states how long ago
+the spike printed rather than implying it is live.
+
+Genuinely immediate alerting needs Binance's `!forceOrder@arr` all-market websocket, which streams
+real liquidation prints as they happen and would also upgrade `forced` from `inferred` to
+`confirmed` (the engine already supports the distinction — it just never receives measured data). A
+websocket needs a persistent connection, so that step only makes sense once the worker is deployed
+somewhere always-on.
 
 ## Honest-accuracy policy
 

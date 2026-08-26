@@ -20,6 +20,7 @@ import {
   maybePersistSignal,
 } from "../src/services/signalService";
 import { persistScan, rankUniverse, scanSymbol, ScanEntry } from "../src/services/scanService";
+import { runLiquidationSpikeAlerts } from "../src/services/liquidationAlerts";
 import { prisma } from "../src/lib/db";
 
 const WORKER_TIMEFRAMES: Timeframe[] = ["5m", "15m", "1h", "4h", "1d", "1w"];
@@ -63,6 +64,18 @@ const SCAN_SLICE = Number(process.env.SCAN_SLICE ?? 40);
  * every 13 minutes, and every symbol is visited before any is revisited.
  */
 let scanCursor = 0;
+
+/**
+ * How often the liquidation-spike sweep runs, in seconds. 0 disables it.
+ *
+ * Defaults to 300 — one 5-minute bar, which is the alert timeframe's own
+ * resolution and therefore the fastest rate at which there is anything new to
+ * see. Running it every 60s tick would re-read the same closed candles four
+ * times out of five at full request-weight cost.
+ */
+const LIQ_ALERT_INTERVAL_MS = Number(process.env.LIQ_ALERT_INTERVAL_SEC ?? 300) * 1000;
+let lastLiqAlertAt = 0;
+
 
 async function tick(): Promise<void> {
   // 1) Evaluate open signals first so learning happens before new entries.
@@ -112,6 +125,30 @@ async function tick(): Promise<void> {
 
   // 3) Rolling universe sweep for confluence setups.
   await scanUniverseSlice();
+
+  // 4) Liquidation-spike alerts.
+  await liquidationSpikePass();
+}
+
+/**
+ * Sweep for liquidation spikes worth an alert.
+ *
+ * On its own clock rather than the tick: the engine reads *closed* candles, so
+ * running it more often than the alert timeframe's bar length re-reads the same
+ * bars and finds the same answer at full request-weight cost. Dedupe would
+ * suppress the duplicate messages, but the sweep would still have been paid for.
+ */
+async function liquidationSpikePass(): Promise<void> {
+  if (LIQ_ALERT_INTERVAL_MS <= 0) return;
+  const now = Date.now();
+  if (now - lastLiqAlertAt < LIQ_ALERT_INTERVAL_MS) return;
+  lastLiqAlertAt = now;
+  try {
+    const run = await runLiquidationSpikeAlerts();
+    if (run.sent > 0 || run.eligible > 0) logger.info("worker.liqspike", { ...run });
+  } catch (err) {
+    logger.warn("worker.liqspike.failed", { error: String(err) });
+  }
 }
 
 /**

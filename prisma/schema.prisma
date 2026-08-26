@@ -237,3 +237,25 @@ model AuditLog {
   @@index([userId])
   @@index([createdAt])
 }
+
+/// One row per alert actually delivered.
+///
+/// Exists for deduplication, not for history. A cron-driven sweep re-evaluates
+/// the same candles every few minutes and would re-announce the same spike on
+/// every pass; the unique `key` makes "have I already sent this?" an atomic
+/// insert rather than a read-then-write race between concurrent invocations.
+/// In-memory dedupe cannot do this job — serverless instances are ephemeral and
+/// do not share state.
+model SentAlert {
+  id        String   @id @default(cuid()) @map("_id")
+  /// dedupe identity, e.g. "liqspike:BTCUSDT:5m:1700000000"
+  key       String   @unique
+  kind      String
+  symbol    String
+  timeframe String?
+  meta      Json
+  sentAt    DateTime @default(now())
+
+  @@index([kind, symbol, sentAt])
+  @@index([sentAt])
+}
