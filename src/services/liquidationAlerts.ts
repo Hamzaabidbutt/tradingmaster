@@ -167,13 +167,30 @@ export function formatSpikeAlert(entry: LiquidationReversalEntry, appUrl?: strin
  * concurrent runs cannot both decide they are the first. A database failure
  * returns false rather than true: skipping an alert is a nuisance, duplicating
  * one on every sweep for the next hour is a reason to mute the channel.
+ *
+ * The `findUnique` ahead of the insert looks redundant against the unique
+ * index, and against a correctly migrated database it is. It is here for the
+ * database that is *not*: MongoDB creates collections implicitly on first
+ * write but never creates indexes, so an install that skipped `db push` has a
+ * SentAlert collection with no unique constraint — every insert succeeds, no
+ * P2002 is ever raised, and the same spike re-alerts on every sweep for as
+ * long as it stays in the window. Read-then-write is not atomic and leaves a
+ * small race, but it turns "spam every five minutes" into "a rare duplicate",
+ * which is the difference between a channel someone keeps and one they mute.
  */
 async function claimKey(entry: LiquidationReversalEntry): Promise<boolean> {
   const s = entry.setup;
+  const key = alertKey(entry);
+  try {
+    if (await prisma.sentAlert.findUnique({ where: { key }, select: { id: true } })) return false;
+  } catch (err) {
+    logger.warn("alerts.liqspike.lookup_failed", { symbol: entry.symbol, error: String(err) });
+    return false;
+  }
   try {
     await prisma.sentAlert.create({
       data: {
-        key: alertKey(entry),
+        key,
         kind: ALERT_KIND,
         symbol: entry.symbol,
         timeframe: entry.timeframe,
