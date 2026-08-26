@@ -3,25 +3,83 @@
 import { CandleStats } from "@/engines/candleStats";
 
 /**
- * Detail card for a clicked candle.
+ * Detail card for the candle under the cursor.
  *
  * Rendered as an overlay inside the chart rather than a separate panel so the
  * numbers sit next to the bar they describe. Values the analysis window does
  * not cover render as "—" instead of zero, because zero forced flow and *no
  * data about* forced flow mean very different things.
+ *
+ * Two layouts, chosen by the pointer rather than by the viewport width:
+ *
+ *  * **Card** (mouse) — the full breakdown, parked in the top-left corner.
+ *    There is a cursor to move it out from under, so it can afford the space.
+ *  * **Strip** (touch) — one wrapping line pinned across the top. A phone has
+ *    no cursor to move away, so the card would sit permanently over the chart
+ *    with nothing the user could do about it. The strip carries the same
+ *    figures in a band the candles can be read around.
  */
 export default function CandleInspector({
   stats,
   pricePrecision,
   live,
+  compact,
 }: {
   stats: CandleStats;
   pricePrecision: number;
   /** true when the cursor is off the chart and this is the newest bar */
   live?: boolean;
+  /** render the touch-friendly strip instead of the full card */
+  compact?: boolean;
 }) {
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
+
+  if (compact) {
+    return (
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 border-b border-white/5 bg-base-900/85 px-2 py-1 font-mono text-[9px] backdrop-blur-md">
+        <span className={`font-bold ${stats.bullish ? "text-bull" : "text-bear"}`}>
+          {stats.bullish ? "▲" : "▼"} {stats.changePct >= 0 ? "+" : ""}
+          {stats.changePct.toFixed(2)}%
+        </span>
+        {live && <span className="text-[8px] uppercase tracking-wider text-neon-cyan">live</span>}
+        <span className="text-slate-500">
+          {when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </span>
+
+        <Pair label="O" value={p(stats.open)} />
+        <Pair label="H" value={p(stats.high)} />
+        <Pair label="L" value={p(stats.low)} />
+        <Pair label="C" value={p(stats.close)} />
+        <Pair
+          label="V"
+          value={fmt(stats.volume)}
+          sub={stats.volumeMultiple != null ? `${stats.volumeMultiple}×` : undefined}
+          tone={stats.volumeMultiple != null && stats.volumeMultiple > 1.5 ? "amber" : "plain"}
+        />
+        <Pair
+          label="Δ"
+          value={`${stats.deltaVolume >= 0 ? "+" : ""}${fmt(stats.deltaVolume)}`}
+          sub={`${stats.buyPct.toFixed(0)}%`}
+          tone={stats.deltaVolume >= 0 ? "bull" : "bear"}
+        />
+        {stats.liquidationDelta != null && (
+          <Pair
+            label="LIQΔ"
+            value={`${stats.liquidationDelta >= 0 ? "+" : ""}${fmt(stats.liquidationDelta)}`}
+            tone={stats.liquidationDelta >= 0 ? "bull" : "bear"}
+          />
+        )}
+        {stats.cvd != null && (
+          <Pair
+            label="CVD"
+            value={`${stats.cvd >= 0 ? "+" : ""}${fmt(stats.cvd)}`}
+            tone={stats.cvd >= 0 ? "bull" : "bear"}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-none absolute left-2 top-2 z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl">
@@ -171,6 +229,35 @@ function Row({
         {sub && <span className="ml-1 font-normal text-slate-500">{sub}</span>}
       </div>
     </div>
+  );
+}
+
+/** One `LABEL value` pair for the compact strip. */
+function Pair({
+  label,
+  value,
+  sub,
+  tone = "plain",
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "bull" | "bear" | "amber" | "plain";
+}) {
+  const color =
+    tone === "bull"
+      ? "text-bull"
+      : tone === "bear"
+        ? "text-bear"
+        : tone === "amber"
+          ? "text-neon-amber"
+          : "text-slate-200";
+  return (
+    <span className="whitespace-nowrap">
+      <span className="text-slate-500">{label}</span>{" "}
+      <span className={`font-semibold ${color}`}>{value}</span>
+      {sub && <span className="ml-0.5 text-slate-500">{sub}</span>}
+    </span>
   );
 }
 
