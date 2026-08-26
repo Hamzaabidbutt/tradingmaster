@@ -115,7 +115,11 @@ extreme**, with a forced signature, that has **already begun reversing**.
 
 ```bash
 # 1. Create a bot with @BotFather in Telegram, then message your new bot once.
-# 2. Find your chat id:  https://api.telegram.org/bot<TOKEN>/getUpdates
+# 2. Find your chat id — this script says WHY it is missing when it is:
+#      npm run telegram:chat-id -- <token>
+#      npm run telegram:chat-id -- --test <chat-id>     # prove it end to end
+#    (Shortcut for a DM: message @userinfobot. The id it reports is your own
+#     user id, which is the chat id for a private chat with your bot.)
 TELEGRAM_BOT_TOKEN="123456:ABC..."
 TELEGRAM_CHAT_ID="987654321"
 
