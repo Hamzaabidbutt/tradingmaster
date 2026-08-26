@@ -39,17 +39,34 @@ jobs:
     steps:
       - name: Check configuration
         env:
-          APP_URL: ${{ secrets.APP_URL }}
+          # APP_URL is a public deployment URL, not a secret, so it is accepted
+          # from either tab — putting it under Variables is a reasonable thing
+          # to do and should not silently produce a blank.
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
-            echo "::error::APP_URL and CRON_SECRET must both be set as repository secrets."
+          missing=""
+          [ -z "$APP_URL" ] && missing="APP_URL"
+          [ -z "$CRON_SECRET" ] && missing="${missing:+$missing and }CRON_SECRET"
+
+          if [ -n "$missing" ]; then
+            echo "::error::$missing is empty in this job."
+            echo "Set it under Settings → Secrets and variables → Actions."
+            echo ""
+            echo "If you believe you already did, check these in order:"
+            echo "  1. The 'Secrets' tab, not the 'Variables' tab beside it."
+            echo "     CRON_SECRET must be a secret. APP_URL may be either."
+            echo "  2. A REPOSITORY secret, not an Environment secret — environment"
+            echo "     secrets only reach jobs that declare 'environment:'."
+            echo "  3. The exact names, uppercase, no trailing spaces."
+            echo "  4. Both must exist in GitHub as well as in the app's own"
+            echo "     environment. GitHub calls the sweep; the app runs it."
             exit 1
           fi
 
       - name: Sweep for liquidation spikes
         env:
-          APP_URL: ${{ secrets.APP_URL }}
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           DRY: ${{ inputs.dry_run && '1' || '0' }}
         run: |
