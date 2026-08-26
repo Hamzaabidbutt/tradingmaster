@@ -21,6 +21,7 @@ import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
 import CandleInspector from "./CandleInspector";
+import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 
 interface Props {
   candles: Candle[];
@@ -108,6 +109,8 @@ export default function TradingChart({
   /** Mirrors hoveredTime without re-rendering, so the crosshair handler can
    *  compare cheaply and only call setState when the bar actually changes. */
   const hoveredTimeRef = useRef<number | null>(null);
+  /** Touchscreen: the inspector renders as a strip, not a card. */
+  const coarsePointer = useCoarsePointer();
 
   /** How many numeric rows are switched on (reserves space at the bottom). */
   const numericRows =
@@ -267,6 +270,32 @@ export default function TradingChart({
     hoveredTimeRef.current = null;
     setHoveredTime(null);
   }, [datasetKey]);
+
+  /**
+   * Release the hover when the pointer leaves the chart or the finger lifts.
+   *
+   * lightweight-charts stops emitting crosshair events at that point but does
+   * not emit a final null, so without this the inspector stays pinned to
+   * whatever bar was last under the cursor — on a phone, forever, since a touch
+   * has no "leave".
+   */
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!ready || !el) return;
+    const release = () => {
+      if (hoveredTimeRef.current === null) return;
+      hoveredTimeRef.current = null;
+      setHoveredTime(null);
+    };
+    el.addEventListener("pointerleave", release);
+    el.addEventListener("touchend", release);
+    el.addEventListener("touchcancel", release);
+    return () => {
+      el.removeEventListener("pointerleave", release);
+      el.removeEventListener("touchend", release);
+      el.removeEventListener("touchcancel", release);
+    };
+  }, [ready]);
 
   const inspectorStats: CandleStats | null = useMemo(() => {
     if (candles.length === 0) return null;
@@ -1099,6 +1128,7 @@ export default function TradingChart({
       {overlays.candleInspector && inspectorStats && (
         <CandleInspector
           live={hoveredTime == null}
+          compact={coarsePointer}
           stats={inspectorStats}
           pricePrecision={pricePrecision}
         />
