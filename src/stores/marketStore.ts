@@ -25,6 +25,12 @@ export interface OverlayToggles {
   liquidationCumulative: boolean;
   /** rolling buy-vs-sell pressure ribbon */
   pressure: boolean;
+  /** hover card showing the stats of the candle under the cursor */
+  candleInspector: boolean;
+  /** resting bid clusters from the order book, drawn as price lines */
+  buyWalls: boolean;
+  /** resting ask clusters from the order book, drawn as price lines */
+  sellWalls: boolean;
   volumeProfile: boolean;
   vwap: boolean;
   movingAverages: boolean;
@@ -75,6 +81,11 @@ export const useMarketStore = create<MarketState>()(
         liquidationDelta: false,
         liquidationCumulative: false,
         pressure: false,
+        candleInspector: true,
+        // Off by default: both poll the order book, and a chart that quietly
+        // opens a network poll nobody asked for is the wrong default.
+        buyWalls: false,
+        sellWalls: false,
         volumeProfile: true,
         vwap: true,
         movingAverages: false,

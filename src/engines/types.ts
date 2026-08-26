@@ -1146,3 +1146,143 @@ export interface OutcomeAnalysis {
   analystsAbstained: AnalystKey[];
   excursion: Excursion;
 }
+
+/* ------------------------------------------------------------------ *
+ * Zone reversal detector — reactions from order blocks and fair value gaps
+ * ------------------------------------------------------------------ */
+
+export interface ZoneReaction {
+  zoneId: string;
+  zoneType: Zone["type"];
+  direction: "bullish" | "bearish";
+  top: number;
+  bottom: number;
+  /** bar time price first re-entered the zone within the evaluated window */
+  tapTime: number;
+  barsSinceTap: number;
+  /** the furthest price traded into/through the zone after the tap */
+  extreme: number;
+  /** % price has travelled back off `extreme`, in the zone's direction */
+  reversalPct: number;
+  /** share of the rejecting bar's range spent as wick, 0-1 */
+  rejectionWick: number;
+  /** net taker delta from the tap to now; the sign should match `direction` */
+  deltaAtTap: number;
+  deltaConfirms: boolean;
+  /** price has closed back out of the zone the way it came */
+  reclaimed: boolean;
+  /** the zone has not been traded through */
+  intact: boolean;
+  /** ids of other zones overlapping this one */
+  confluence: string[];
+  /** 0-100 quality of this single reaction */
+  score: number;
+  note: string;
+}
+
+export interface ZoneReversalSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  /** direction of the best reaction, or "none" when nothing reacted */
+  direction: Bias;
+  best: ZoneReaction | null;
+  reactions: ZoneReaction[];
+  /** 0-100, the best reaction's score plus context */
+  score: number;
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  entry: number | null;
+  invalidation: number | null;
+  target: number | null;
+  headline: string;
+  explanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Liquidation spike reversal detector
+ * ------------------------------------------------------------------ */
+
+export interface LiquidationSpike {
+  time: number;
+  /** which cohort was forced out */
+  side: "long" | "short";
+  /** estimated forced volume on that bar */
+  volume: number;
+  /** multiple of the window's mean absolute liquidation flow */
+  multiple: number;
+  price: number;
+  /** the extreme the spike bar printed (low for a long flush, high for a short squeeze) */
+  extreme: number;
+  /** true when the spike printed at the extreme of the analysed window */
+  atExtreme: boolean;
+  /** distance from the window extreme, as a % of price */
+  distanceFromExtremePct: number;
+  barsAgo: number;
+}
+
+export interface LiquidationReversalSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  spike: LiquidationSpike | null;
+  /** "bottom" = long flush at the low, "top" = short squeeze at the high */
+  location: "bottom" | "top" | "mid" | "none";
+  /** % price has reversed away from the spike extreme */
+  reversalPct: number;
+  /** the peak reversal reached since the spike, which may exceed `reversalPct` */
+  peakReversalPct: number;
+  /**
+   * Whether the flow was genuinely forced.
+   *
+   * `confirmed` — live forced-order prints were observed on this bar.
+   * `inferred`  — no forced-order feed, but the price/volume/aggression
+   *               signature is unambiguous.
+   * `unlikely`  — the move was orderly; this reads as voluntary flow.
+   */
+  forced: "confirmed" | "inferred" | "unlikely";
+  forcedNote: string;
+  /** 0-100 */
+  score: number;
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  /** the flush/squeeze extreme, which is the level that must hold */
+  invalidation: number | null;
+  target: number | null;
+  headline: string;
+  explanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Resting order walls
+ * ------------------------------------------------------------------ */
+
+export interface OrderWall {
+  side: "bid" | "ask";
+  price: number;
+  /** base-asset size resting at (or clustered around) the price */
+  size: number;
+  /** size × price */
+  notional: number;
+  /** multiple of the mean level size on that side of the book */
+  multiple: number;
+  /** signed % from the current price; positive = above */
+  distancePct: number;
+  /** how many book levels the cluster spans */
+  levels: number;
+  note: string;
+}
+
+export interface OrderWallResult {
+  price: number;
+  bids: OrderWall[];
+  asks: OrderWall[];
+  /** -1..1 across the sampled book; positive = bid heavy */
+  imbalance: number;
+  /** the largest wall on each side, when one qualifies */
+  largestBid: OrderWall | null;
+  largestAsk: OrderWall | null;
+  /** unix seconds this snapshot was taken */
+  sampledAt: number;
+  summary: string[];
+}

@@ -13,17 +13,18 @@ import { CandleStats } from "@/engines/candleStats";
 export default function CandleInspector({
   stats,
   pricePrecision,
-  onClose,
+  live,
 }: {
   stats: CandleStats;
   pricePrecision: number;
-  onClose: () => void;
+  /** true when the cursor is off the chart and this is the newest bar */
+  live?: boolean;
 }) {
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
 
   return (
-    <div className="absolute left-2 top-2 z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl">
+    <div className="pointer-events-none absolute left-2 top-2 z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
           <div
@@ -36,13 +37,14 @@ export default function CandleInspector({
             {when.toLocaleDateString()} {when.toLocaleTimeString()}
           </div>
         </div>
-        <button
-          onClick={onClose}
-          aria-label="Close candle details"
-          className="rounded px-1.5 py-0.5 text-[11px] text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
-        >
-          ✕
-        </button>
+        {live && (
+          <span
+            className="rounded bg-neon-cyan/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-neon-cyan"
+            title="No candle hovered — showing the most recent bar"
+          >
+            live
+          </span>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-1">

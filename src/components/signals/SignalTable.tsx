@@ -2,6 +2,7 @@
 
 import { Fragment } from "react";
 import { AnalystKey, OutcomeAnalysis } from "@/engines/types";
+import { classifyBucket } from "@/engines/outcomeBuckets";
 import { SignalRow, stringsOf, verdictsOf } from "@/hooks/useDashboard";
 import {
   ANALYST_LABEL,
@@ -25,28 +26,33 @@ import {
  * invalidation conditions, and the outcome analysis.
  *
  * Status and Result are separate columns on purpose. Status is the lifecycle
- * bucket — Active / Successful / Failed / Expired, decided by the sign of the
- * realised P/L exactly as the API filters and the performance dashboard decide
- * it. Result is the raw mechanical ending (TP3 hit, stopped, expired). A signal
- * that tagged TP2 and then reversed into a net loss is `Failed` with a result
- * of `Stopped`, and collapsing the two columns would hide that.
+ * bucket — Active / Successful / Partial / Failed / Expired, decided by
+ * `classifyBucket` so this table, the API filters and the performance dashboard
+ * cannot disagree. Result is the raw mechanical ending (TP3 hit, stopped,
+ * expired). A signal that tagged TP2 and then reversed into a net loss is
+ * `Partial` with a result of `Stopped`, and collapsing the two columns would
+ * hide that.
  */
 
-const ACTIVE_STATUSES = new Set(["ACTIVE", "TP1_HIT", "TP2_HIT"]);
-
-type Bucket = "active" | "successful" | "failed" | "expired";
+type Bucket = "active" | "successful" | "partial" | "failed" | "expired";
 
 function bucketOf(s: SignalRow): Bucket {
-  if (ACTIVE_STATUSES.has(s.status)) return "active";
-  const pnl = s.resultPnlPct ?? 0;
-  if (pnl > 0) return "successful";
-  if (s.status === "EXPIRED") return "expired";
-  return "failed";
+  const bucket = classifyBucket({
+    status: s.status,
+    resultPnlPct: s.resultPnlPct ?? null,
+    outcomeAnalysis: s.outcomeAnalysis as OutcomeAnalysis | null,
+  });
+  // An expiry that never reached the first target is reported as `Expired`
+  // rather than `Failed`: the trade was closed by the clock, not by the
+  // market, and the distinction is the whole reason the column exists.
+  if (bucket === "failed" && s.status === "EXPIRED") return "expired";
+  return bucket;
 }
 
 const BUCKET_STYLE: Record<Bucket, string> = {
   active: "border-neon-cyan/30 bg-neon-cyan/10 text-neon-cyan",
   successful: "border-bull/35 bg-bull/10 text-bull",
+  partial: "border-amber-400/35 bg-amber-400/10 text-amber-300",
   failed: "border-bear/35 bg-bear/10 text-bear",
   expired: "border-slate-500/30 bg-slate-500/10 text-slate-400",
 };

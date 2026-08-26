@@ -99,7 +99,7 @@ describe("accumulation detector", () => {
 
   it("explains every criterion whether met or not", () => {
     const s = detectAccumulation("X", "1h", accumulationSeries());
-    expect(s.criteria).toHaveLength(6);
+    expect(s.criteria).toHaveLength(7);
     for (const c of s.criteria) {
       expect(c.detail.length).toBeGreaterThan(20);
     }
@@ -112,6 +112,65 @@ describe("accumulation detector", () => {
     const s = detectAccumulation("X", "1h", accumulationSeries());
     if (s.support != null && s.invalidation != null) {
       expect(s.invalidation).toBeLessThan(s.support);
+    }
+  });
+});
+
+describe("liquidation delta spike criterion", () => {
+  it("credits a forced flush that happened at the base and was reclaimed", () => {
+    const out: ReturnType<typeof candle>[] = [];
+    let t = 1_700_000_000;
+    const step = 3600;
+    // Quiet backdrop so the flush reads as outsized against the average.
+    for (let i = 0; i < 40; i++) {
+      out.push(candle(t, 104, 104.4, 103.6, 104, 1000, 500));
+      t += step;
+    }
+    // Capitulation: a wide, high-volume markdown dominated by sell aggression.
+    out.push(candle(t, 104, 104.1, 96, 96.4, 9000, 1200));
+    t += step;
+    // Reclaim above the flush midpoint on buy-dominant volume.
+    for (let i = 0; i < 10; i++) {
+      const px = 97 + i * 0.9;
+      out.push(candle(t, px, px + 1.1, px - 0.3, px + 0.9, 3000, 2100));
+      t += step;
+    }
+    const s = detectAccumulation("X", "1h", out);
+    const spike = s.criteria.find((c) => c.key === "liquidation_spike")!;
+    expect(spike.met).toBe(true);
+    expect(spike.detail).toContain("mechanical");
+  });
+
+  it("does not credit a flush that happened on the way down, away from the base", () => {
+    const out: ReturnType<typeof candle>[] = [];
+    let t = 1_700_000_000;
+    const step = 3600;
+    for (let i = 0; i < 30; i++) {
+      out.push(candle(t, 120, 120.4, 119.6, 120, 1000, 500));
+      t += step;
+    }
+    // Flush high up, then price keeps grinding lower well past it.
+    out.push(candle(t, 120, 120.1, 112, 112.3, 9000, 1200));
+    t += step;
+    for (let i = 0; i < 25; i++) {
+      const px = 112 - i * 0.8;
+      out.push(candle(t, px, px + 0.3, px - 1.0, px - 0.7, 1200, 480));
+      t += step;
+    }
+    const s = detectAccumulation("X", "1h", out);
+    const spike = s.criteria.find((c) => c.key === "liquidation_spike")!;
+    expect(spike.met).toBe(false);
+    expect(spike.score).toBe(0);
+  });
+
+  it("stays inside its weight and is reported for every input", () => {
+    for (let seed = 1; seed <= 6; seed++) {
+      const s = detectAccumulation("X", "1h", syntheticCandles(300, seed));
+      const spike = s.criteria.find((c) => c.key === "liquidation_spike")!;
+      expect(spike).toBeDefined();
+      expect(spike.weight).toBe(14);
+      expect(spike.score).toBeLessThanOrEqual(14);
+      expect(spike.detail.length).toBeGreaterThan(20);
     }
   });
 });

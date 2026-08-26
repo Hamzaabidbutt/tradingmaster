@@ -9,7 +9,14 @@ import { analyzeCandleCloseExpansion } from "@/engines/candleCloseExpansion";
 import { analyzeRangeTrading } from "@/engines/rangeTrading";
 import { evaluateConfluence } from "@/engines/confluence";
 import { detectAccumulation } from "@/engines/accumulation";
-import { AccumulationSetup, ConfluenceSetup } from "@/engines/types";
+import { detectZoneReversal } from "@/engines/zoneReversal";
+import { detectLiquidationReversal } from "@/engines/liquidationReversal";
+import {
+  AccumulationSetup,
+  ConfluenceSetup,
+  LiquidationReversalSetup,
+  ZoneReversalSetup,
+} from "@/engines/types";
 
 /**
  * Universe scanner — finds the best setups across every USDT perpetual.
@@ -231,6 +238,165 @@ export async function scanAccumulation(opts: {
     candidates: entries.filter((e) => e.setup.qualified).sort(byScore),
     forming: entries
       .filter((e) => !e.setup.qualified && e.setup.grade === "forming")
+      .sort(byScore)
+      .slice(0, 12),
+    scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Zone reversal sweep — reactions from order blocks and FVGs
+ * ------------------------------------------------------------------ */
+
+export interface ZoneReversalEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: ZoneReversalSetup;
+}
+
+export interface ZoneReversalScan {
+  timeframe: string;
+  /** confirmed reversals, strongest first */
+  bullish: ZoneReversalEntry[];
+  bearish: ZoneReversalEntry[];
+  /** price inside a zone with no reclaim yet — the setup before it is a setup */
+  forming: ZoneReversalEntry[];
+  scanned: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep the universe for reactions from order blocks and fair value gaps.
+ *
+ * Split by direction rather than ranked into one list: a bullish reversal from
+ * a demand zone and a bearish one from supply are opposite trades, and a single
+ * ranked column would put them side by side as if they were comparable.
+ */
+export async function scanZoneReversals(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<ZoneReversalScan> {
+  const ranked = (await rankUniverse()).slice(0, opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectZoneReversal(r.symbol, opts.timeframe, candles),
+    } satisfies ZoneReversalEntry;
+  });
+
+  const entries: ZoneReversalEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: ZoneReversalEntry, b: ZoneReversalEntry) => b.setup.score - a.setup.score;
+  const qualified = entries.filter((e) => e.setup.qualified);
+
+  return {
+    timeframe: opts.timeframe,
+    bullish: qualified.filter((e) => e.setup.direction === "bullish").sort(byScore),
+    bearish: qualified.filter((e) => e.setup.direction === "bearish").sort(byScore),
+    forming: entries
+      .filter((e) => !e.setup.qualified && e.setup.grade === "forming")
+      .sort(byScore)
+      .slice(0, 12),
+    scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Liquidation spike reversal sweep
+ * ------------------------------------------------------------------ */
+
+export interface LiquidationReversalEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: LiquidationReversalSetup;
+}
+
+export interface LiquidationReversalScan {
+  timeframe: string;
+  /** long flushes at the low — forced selling exhausted */
+  bottoms: LiquidationReversalEntry[];
+  /** short squeezes at the high — forced buying exhausted */
+  tops: LiquidationReversalEntry[];
+  /** spiked, but mid-move or without a reversal yet */
+  watching: LiquidationReversalEntry[];
+  scanned: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for coins where a liquidation delta spike has just printed at an
+ * extreme, and report the reversal it produced.
+ *
+ * Nothing here reads a forced-order feed: a universe sweep has no websocket per
+ * symbol, so `setup.forced` comes back as `inferred` at best. That is carried in
+ * the data rather than hidden, because a cascade inferred from a candle and one
+ * observed in the tape are different-sized bets.
+ */
+export async function scanLiquidationReversals(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<LiquidationReversalScan> {
+  const ranked = (await rankUniverse()).slice(0, opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectLiquidationReversal(r.symbol, opts.timeframe, candles),
+    } satisfies LiquidationReversalEntry;
+  });
+
+  const entries: LiquidationReversalEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: LiquidationReversalEntry, b: LiquidationReversalEntry) =>
+    b.setup.score - a.setup.score;
+  const qualified = entries.filter((e) => e.setup.qualified);
+
+  return {
+    timeframe: opts.timeframe,
+    bottoms: qualified.filter((e) => e.setup.location === "bottom").sort(byScore),
+    tops: qualified.filter((e) => e.setup.location === "top").sort(byScore),
+    // A spike that has not reversed is still worth seeing — it is the same
+    // event one bar earlier, and hiding it would mean the panel only ever
+    // shows moves that already happened.
+    watching: entries
+      .filter((e) => !e.setup.qualified && e.setup.spike !== null && e.setup.forced !== "unlikely")
       .sort(byScore)
       .slice(0, 12),
     scanned: entries.length,

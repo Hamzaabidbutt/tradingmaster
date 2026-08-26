@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { AnalystKey, AnalystVerdict, EvidenceBasis, OutcomeAnalysis } from "@/engines/types";
+import { bucketScore, classifyBucket } from "@/engines/outcomeBuckets";
 
 /**
  * Per-analyst and overall performance, derived from closed signals.
@@ -89,8 +90,12 @@ export interface AnalystPerformance {
   totalSignals: number;
   wins: number;
   losses: number;
+  /** closed red but reached TP1 first — right on direction, wrong on exit */
+  partials: number;
   /** null until MIN_SAMPLE attributed signals exist */
   winRate: number | null;
+  /** win rate with partials given half credit, 0-100 */
+  weightedAccuracy: number;
   longWins: number;
   longLosses: number;
   longWinRate: number | null;
@@ -130,10 +135,22 @@ export interface TargetProgressStat {
 export interface OverallPerformance {
   totalSignals: number;
   successful: number;
+  /**
+   * Closed at or below breakeven having reached the first target.
+   *
+   * Counted apart from `failed`, and excluded from it, so the three buckets
+   * add up to the closed total. A call that ran to TP1 and gave it back was
+   * right about direction; filing it beside an outright miss hides the only
+   * distinction that matters when reviewing losses.
+   */
+  partials: number;
+  /** closed at or below breakeven without ever reaching the first target */
   failed: number;
   active: number;
   expired: number;
   winRate: number | null;
+  /** win rate with partials given half credit, 0-100 */
+  weightedAccuracy: number;
   longSignals: number;
   shortSignals: number;
   longWinRate: number | null;
@@ -204,6 +221,30 @@ function lossTargetProgress(losses: PerfSignal[]): TargetProgressStat {
  */
 function isWin(s: PerfSignal): boolean {
   return (s.resultPnlPct ?? 0) > 0;
+}
+
+/**
+ * Reached TP1 but closed red — directionally right, managed badly.
+ *
+ * Kept out of `isWin` so P/L-based averages stay honest (these trades really
+ * did lose money), but counted separately so accuracy is not understated by
+ * lumping them in with calls that were simply wrong.
+ */
+function isPartialWin(s: PerfSignal): boolean {
+  return !isWin(s) && classifyBucket(s) === "partial";
+}
+
+/**
+ * Accuracy that gives partials half credit.
+ *
+ * A plain win rate treats "right, then gave it back" identically to "wrong
+ * from the start". Weighting partials at 0.5 separates the two without
+ * pretending a red trade was green.
+ */
+function weightedAccuracy(signals: PerfSignal[]): number {
+  if (signals.length === 0) return 0;
+  const score = signals.reduce((sum, s) => sum + bucketScore(classifyBucket(s)), 0);
+  return Number(((score / signals.length) * 100).toFixed(1));
 }
 
 function isClosed(s: PerfSignal): boolean {
@@ -346,6 +387,7 @@ function analystPerformance(
   const mine = closed.filter((s) => supported(s, spec.key));
   const wins = mine.filter(isWin);
   const losses = mine.filter((s) => !isWin(s));
+  const partials = mine.filter(isPartialWin);
 
   const longs = mine.filter((s) => s.side === "BUY");
   const shorts = mine.filter((s) => s.side === "SELL");
@@ -371,7 +413,9 @@ function analystPerformance(
     totalSignals: mine.length,
     wins: wins.length,
     losses: losses.length,
+    partials: partials.length,
     winRate: rate(wins.length, mine.length),
+    weightedAccuracy: weightedAccuracy(mine),
     longWins: longWins.length,
     longLosses: longs.length - longWins.length,
     longWinRate: rate(longWins.length, longs.length, 3),
@@ -400,6 +444,7 @@ export function computePerformance(signals: PerfSignal[]): PerformanceReport {
   const closed = signals.filter(isClosed);
   const wins = closed.filter(isWin);
   const losses = closed.filter((s) => !isWin(s));
+  const partials = closed.filter(isPartialWin);
 
   const longs = closed.filter((s) => s.side === "BUY");
   const shorts = closed.filter((s) => s.side === "SELL");
@@ -419,10 +464,14 @@ export function computePerformance(signals: PerfSignal[]): PerformanceReport {
     overall: {
       totalSignals: signals.length,
       successful: wins.length,
-      failed: losses.length,
+      partials: partials.length,
+      // Partials are removed from the failure count, not double-counted:
+      // successful + partials + failed === closed.
+      failed: losses.length - partials.length,
       active: signals.filter((s) => ACTIVE_STATUSES.includes(s.status)).length,
       expired: signals.filter((s) => s.status === "EXPIRED").length,
       winRate: rate(wins.length, closed.length),
+      weightedAccuracy: weightedAccuracy(closed),
       longSignals: longs.length,
       shortSignals: shorts.length,
       longWinRate: rate(longs.filter(isWin).length, longs.length),

@@ -60,9 +60,10 @@ export default function PerformanceStrip({
       }
     >
       <div className="space-y-2 p-3">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
           <StatChip label="Total signals" value={o.totalSignals} />
           <StatChip label="Successful" value={o.successful} tone="bull" />
+          <StatChip label="Partial" value={o.partials} tone="amber" />
           <StatChip label="Failed" value={o.failed} tone="bear" />
           <StatChip label="Active" value={o.active} tone="cyan" />
           <StatChip label="Win rate" value={fmtRate(o.winRate)} tone={rateTone(o.winRate)} />
@@ -78,8 +79,10 @@ export default function PerformanceStrip({
           />
           <StatChip
             label="Avg loss"
-            value={fmtMean(o.avgLossPct, o.failed)}
-            tone={o.failed > 0 ? "bear" : "neutral"}
+            // Every red trade, partials included — they really did lose money,
+            // which is exactly why they are kept out of the win rate.
+            value={fmtMean(o.avgLossPct, o.failed + o.partials)}
+            tone={o.failed + o.partials > 0 ? "bear" : "neutral"}
           />
           <StatChip
             label="Best strategy"
@@ -114,6 +117,14 @@ export default function PerformanceStrip({
           <StatChip label="LONG losers" value={fmtProgress(prog.long)} tone="amber" />
           <StatChip label="SHORT losers" value={fmtProgress(prog.short)} tone="amber" />
         </div>
+
+        <p className="text-[10px] leading-relaxed text-slate-600">
+          <strong className="text-slate-400">Partial</strong> means the signal reached its first
+          target and then closed at or below breakeven — directionally right, given back. Those are
+          held out of both the win rate (they lost money) and the failure count (the call was not
+          wrong), and counted at half credit in weighted accuracy, currently{" "}
+          <span className="font-mono text-slate-400">{o.weightedAccuracy.toFixed(1)}%</span>.
+        </p>
 
         <p className="text-[10px] leading-relaxed text-slate-600">
           {o.longSignals} LONG and {o.shortSignals} SHORT signals have resolved, out of{" "}
