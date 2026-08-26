@@ -69,6 +69,21 @@ export interface SignalRow {
   invalidation: unknown;
   createdAt: string;
   closedAt: string | null;
+  /**
+   * Live progress, attached by /api/signals to still-running positions only.
+   * Absent on closed signals and on any symbol whose price lookup failed.
+   */
+  progress?: {
+    currentPrice: number;
+    pnlPct: number;
+    rMultiple: number;
+    progressToTp1Pct: number;
+    drawdownToStopPct: number;
+    targets: { label: string; price: number; progressPct: number; hit: boolean; remainingPct: number }[];
+    nextTarget: { label: string; price: number; remainingPct: number } | null;
+    state: "in_profit" | "in_loss" | "at_entry";
+    summary: string;
+  };
 }
 
 /** Generic JSON poller that never discards good data for a failed refresh. */

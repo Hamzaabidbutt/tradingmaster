@@ -7,6 +7,10 @@ import {
   scanUniverse,
   UniverseScan,
 } from "@/services/scanService";
+import {
+  persistScanSignalsInBackground,
+  refreshOpenSignalsInBackground,
+} from "@/services/signalLifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +39,14 @@ export async function GET(req: NextRequest) {
 
   try {
     const live = await scanUniverse({ timeframe, depth, minConfidence });
+
+    // Turn qualifying setups into tracked signals, and refresh the ones
+    // already open. On a long-lived host the worker does this; serverless has
+    // no worker, so the scan itself drives the lifecycle. Both are
+    // fire-and-forget — the dashboard must not wait on database writes.
+    persistScanSignalsInBackground([...live.long, ...live.short]);
+    refreshOpenSignalsInBackground();
+
     if (!includePersisted) return NextResponse.json(wire(live));
 
     const persisted = await loadPersistedScan(timeframe);

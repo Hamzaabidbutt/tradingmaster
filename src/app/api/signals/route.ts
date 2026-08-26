@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { parseVerdicts } from "@/services/performanceService";
+import { refreshOpenSignalsInBackground } from "@/services/signalLifecycle";
+import { computeLiveProgress } from "@/engines/signalProgress";
+import { fetchTicker } from "@/lib/binance";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +40,10 @@ function isOutcome(v: string | null): v is Outcome {
 }
 
 export async function GET(req: NextRequest) {
+  // Serverless has no worker to advance signal statuses, so reads drive the
+  // lifecycle. Throttled and fire-and-forget: the response never waits.
+  refreshOpenSignalsInBackground();
+
   const q = req.nextUrl.searchParams;
   const symbol = q.get("symbol") ?? undefined;
   const status = q.get("status") ?? undefined;
@@ -124,8 +131,13 @@ export async function GET(req: NextRequest) {
     const overFetched = needsPostFilter && rows.length === take && signals.length > limit;
     signals = signals.slice(0, limit);
 
+    // Attach live progress to running positions. Entry alone cannot tell you
+    // whether a signal is winning; the card needs price now, distance covered
+    // toward TP1 and how much of the stop has been eaten.
+    const enriched = await attachLiveProgress(signals);
+
     return NextResponse.json({
-      signals,
+      signals: enriched,
       count: signals.length,
       nextCursor: signals.length === limit ? signals[signals.length - 1].id : null,
       overFetched,
@@ -147,4 +159,52 @@ export async function GET(req: NextRequest) {
     // DB down shouldn't break the dashboard — signals are enrichment.
     return NextResponse.json({ signals: [], count: 0, warning: "database unavailable" });
   }
+}
+
+type SignalRow = Awaited<ReturnType<typeof prisma.signal.findMany>>[number];
+
+/**
+ * Add a `progress` block to every still-running signal.
+ *
+ * Prices are fetched once per distinct symbol and the whole step is
+ * best-effort: if the market feed is unreachable the signals are returned
+ * unchanged rather than failing the request, because a stale progress number
+ * is worse than none and an empty dashboard is worse than both.
+ */
+async function attachLiveProgress(signals: SignalRow[]) {
+  const running = signals.filter((s) => (ACTIVE_STATUSES as readonly string[]).includes(s.status));
+  if (running.length === 0) return signals;
+
+  const symbols = [...new Set(running.map((s) => s.symbol))];
+  const prices = new Map<string, number>();
+  await Promise.all(
+    symbols.map(async (sym) => {
+      try {
+        const t = await fetchTicker(sym);
+        if (Number.isFinite(t.lastPrice)) prices.set(sym, t.lastPrice);
+      } catch {
+        /* leave unpriced — that signal simply renders without progress */
+      }
+    })
+  );
+
+  return signals.map((s) => {
+    const price = prices.get(s.symbol);
+    if (price === undefined || !(ACTIVE_STATUSES as readonly string[]).includes(s.status)) return s;
+    return {
+      ...s,
+      progress: computeLiveProgress(
+        {
+          side: s.side as "BUY" | "SELL",
+          entry: s.entry,
+          stopLoss: s.stopLoss,
+          tp1: s.tp1,
+          tp2: s.tp2,
+          tp3: s.tp3,
+          status: s.status,
+        },
+        price
+      ),
+    };
+  });
 }

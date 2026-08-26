@@ -870,6 +870,91 @@ export interface ConfluenceSetup {
   invalidation: string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * Accumulation / reversal detector
+ * ------------------------------------------------------------------ */
+
+export interface AccumulationCriterion {
+  key: string;
+  label: string;
+  met: boolean;
+  /** points contributed toward the 0-100 score */
+  score: number;
+  /** maximum this criterion can contribute */
+  weight: number;
+  detail: string;
+}
+
+export interface AccumulationSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  criteria: AccumulationCriterion[];
+  /** 0-100 weighted total */
+  score: number;
+  /** required criteria all met AND score above threshold */
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  /** the level being defended, when one exists */
+  support: number | null;
+  target: number | null;
+  invalidation: number | null;
+  headline: string;
+  explanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Pressure map — forced buyers and forced sellers
+ * ------------------------------------------------------------------ */
+
+export interface PressureZone {
+  price: number;
+  /** signed % from current price; positive = above */
+  distancePct: number;
+  /** which cohort gets forced out here */
+  side: "long" | "short";
+  /** 0-100 relative heat */
+  intensity: number;
+  /** how this zone was derived — never presented as measured when inferred */
+  basis: "equal_levels" | "swing_liquidity" | "leverage_band";
+  note: string;
+}
+
+export interface WhaleOrder {
+  time: number;
+  price: number;
+  side: "buy" | "sell";
+  volume: number;
+  /** multiple of average bar volume */
+  multiple: number;
+  notional: number;
+  distancePct: number;
+  /** defending = positioned to hold this level; trapped = now offside */
+  posture: "defending" | "trapped";
+  note: string;
+}
+
+export interface PressureMap {
+  price: number;
+  /** stop pools above price — touching them forces buying */
+  shortSqueeze: PressureZone[];
+  /** stop pools below price — touching them forces selling */
+  longSqueeze: PressureZone[];
+  forcedLongLiquidation: PressureZone[];
+  forcedShortLiquidation: PressureZone[];
+  whales: WhaleOrder[];
+  cvdDivergence: {
+    present: boolean;
+    kind: string | null;
+    bias: Bias;
+    strength: number;
+    note: string;
+  };
+  /** which direction the forced flow pulls, weighted by size and proximity */
+  lean: Bias;
+  summary: string[];
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -923,6 +1008,7 @@ export interface FullAnalysis {
   /** null when 1-minute candles were unavailable */
   pulse: RecentWindowSummary | null;
   multiWindow: MultiWindowResult;
+  pressureMap: PressureMap;
   /** chart-only read: patterns, price action, historical analogues */
   chartAnalyst: ChartAnalystResult;
   /** key levels + decisive candle closes → expansion probability */

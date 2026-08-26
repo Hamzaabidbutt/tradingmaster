@@ -12,6 +12,7 @@ import StructurePanel from "@/components/panels/StructurePanel";
 import LevelsPanel from "@/components/panels/LevelsPanel";
 import VolumeProfilePanel from "@/components/panels/VolumeProfilePanel";
 import FootprintPanel from "@/components/panels/FootprintPanel";
+import PressureMapPanel from "@/components/panels/PressureMapPanel";
 import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
 import MultiWindowPanel from "@/components/panels/MultiWindowPanel";
 import ChartAnalystPanel from "@/components/panels/ChartAnalystPanel";
@@ -150,6 +151,16 @@ export default function TerminalPage() {
           <AIInsightPanel analysis={analysis} />
         </div>
 
+        {/* Footprint sits directly under the AI feed on mobile, where the two
+            are read together. On xl the right rail is only one column wide, so
+            the ladder lives in the deep-dive row instead — hence one instance
+            per breakpoint rather than a reordered shared node. */}
+        <div className="h-[600px] xl:hidden">
+          <FootprintPanel analysis={analysis} />
+        </div>
+        <div className="h-[620px] xl:hidden">
+          <PressureMapPanel analysis={analysis} pricePrecision={pricePrecision} />
+        </div>
       </div>
 
       {/* Conclusion row: recent-window pulse + multi-window read, side by side.
@@ -183,9 +194,16 @@ export default function TerminalPage() {
 
       {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 lg:grid-cols-3">
-        <div className="h-[600px]"><FootprintPanel analysis={analysis} /></div>
+        <div className="hidden h-[600px] xl:block"><FootprintPanel analysis={analysis} /></div>
         <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
         <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>
+      </div>
+
+      {/* Forced-flow map — sits directly below the footprint row on desktop. */}
+      <div className="hidden p-3 pt-0 xl:block">
+        <div className="h-[620px]">
+          <PressureMapPanel analysis={analysis} pricePrecision={pricePrecision} />
+        </div>
       </div>
 
       {/* Levels & patterns */}

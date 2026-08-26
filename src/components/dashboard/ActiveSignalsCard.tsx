@@ -72,15 +72,27 @@ export default function ActiveSignalsCard() {
                   </div>
                   <div className="mt-1 flex flex-wrap gap-x-3 font-mono text-[10px] text-slate-500">
                     <span>entry {fmtPrice(s.entry)}</span>
+                    {s.progress && (
+                      <span className="text-slate-200">
+                        now {fmtPrice(s.progress.currentPrice)}
+                      </span>
+                    )}
                     <span className="text-bear/80">sl {fmtPrice(s.stopLoss)}</span>
                     <span className="text-bull/80">tp {fmtPrice(s.tp1)}</span>
                     <span>rr {s.riskReward.toFixed(2)}</span>
+                    {s.progress && (
+                      <span className={s.progress.pnlPct >= 0 ? "text-bull" : "text-bear"}>
+                        {fmtPct(s.progress.pnlPct)} ({s.progress.rMultiple.toFixed(2)}R)
+                      </span>
+                    )}
                     {s.resultPnlPct !== null && (
                       <span className={s.resultPnlPct >= 0 ? "text-bull" : "text-bear"}>
                         {fmtPct(s.resultPnlPct)}
                       </span>
                     )}
                   </div>
+
+                  {s.progress && <ProgressTrack progress={s.progress} />}
                   {(supporters.length > 0 || opponents.length > 0) && (
                     <div className="mt-1 text-[10px] text-slate-600">
                       {supporters.length > 0 && `backed by ${supporters.map((v) => v.name).join(", ")}`}
@@ -99,5 +111,72 @@ export default function ActiveSignalsCard() {
         </ul>
       )}
     </GlassCard>
+  );
+}
+
+/**
+ * Entry → TP1 progress, with the stop drawn as the opposing direction.
+ *
+ * Two bars rather than one: a single centre-out bar reads as "how am I doing"
+ * but hides *which* of the two races is closer to finishing. Traders need both
+ * — 60% of the way to target is a very different position from 60% of the way
+ * to the stop.
+ */
+function ProgressTrack({
+  progress,
+}: {
+  progress: NonNullable<import("@/hooks/useDashboard").SignalRow["progress"]>;
+}) {
+  const winning = progress.state === "in_profit";
+  return (
+    <div className="mt-1.5">
+      <div className="flex items-center gap-2">
+        <span className="w-7 shrink-0 text-[9px] uppercase tracking-wider text-slate-600">TP1</span>
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/5">
+          <div
+            className="h-full rounded-full bg-bull transition-all duration-500"
+            style={{ width: `${progress.progressToTp1Pct}%` }}
+          />
+        </div>
+        <span className="w-9 shrink-0 text-right font-mono text-[9px] text-bull">
+          {progress.progressToTp1Pct.toFixed(0)}%
+        </span>
+      </div>
+      <div className="mt-0.5 flex items-center gap-2">
+        <span className="w-7 shrink-0 text-[9px] uppercase tracking-wider text-slate-600">SL</span>
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/5">
+          <div
+            className="h-full rounded-full bg-bear transition-all duration-500"
+            style={{ width: `${progress.drawdownToStopPct}%` }}
+          />
+        </div>
+        <span className="w-9 shrink-0 text-right font-mono text-[9px] text-bear">
+          {progress.drawdownToStopPct.toFixed(0)}%
+        </span>
+      </div>
+
+      <div className="mt-1 flex flex-wrap items-center gap-1">
+        {progress.targets.map((t) => (
+          <span
+            key={t.label}
+            title={
+              t.hit
+                ? `${t.label} reached at ${t.price}`
+                : `${t.label} needs a further ${Math.abs(t.remainingPct).toFixed(2)}%`
+            }
+            className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold ${
+              t.hit ? "bg-bull/15 text-bull" : "bg-white/5 text-slate-500"
+            }`}
+          >
+            {t.hit ? `✓ ${t.label}` : `${t.label} ${t.progressPct.toFixed(0)}%`}
+          </span>
+        ))}
+        {progress.nextTarget && (
+          <span className={`text-[9px] ${winning ? "text-slate-500" : "text-slate-600"}`}>
+            next {progress.nextTarget.label} · {Math.abs(progress.nextTarget.remainingPct).toFixed(2)}% away
+          </span>
+        )}
+      </div>
+    </div>
   );
 }

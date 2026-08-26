@@ -9,6 +9,7 @@ import TopOpportunities from "@/components/dashboard/TopOpportunities";
 import ActiveSignalsCard from "@/components/dashboard/ActiveSignalsCard";
 import AnalystPerformanceCard from "@/components/dashboard/AnalystPerformanceCard";
 import RecentOutcomes from "@/components/dashboard/RecentOutcomes";
+import AccumulationScanner from "@/components/dashboard/AccumulationScanner";
 import { ScanTimeframe } from "@/components/dashboard/shared";
 import { useOverview, useScan } from "@/hooks/useDashboard";
 
@@ -60,6 +61,9 @@ export default function DashboardPage() {
           error={scan.error}
           onRefresh={scan.refresh}
         />
+
+        {/* 3b — the narrow question: who is building a base right now? */}
+        <AccumulationScanner />
 
         {/* 4 — both sides, same component, same width. */}
         <div className="grid gap-3 lg:grid-cols-2">

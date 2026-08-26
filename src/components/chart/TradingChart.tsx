@@ -19,6 +19,8 @@ import { Candle, FullAnalysis } from "@/engines/types";
 import { OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
+import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
+import CandleInspector from "./CandleInspector";
 
 interface Props {
   candles: Candle[];
@@ -92,6 +94,8 @@ export default function TradingChart({
   const rafRef = useRef<number | null>(null);
   /** Y position (px) of the live price, for the countdown badge. */
   const [badgeY, setBadgeY] = useState<number | null>(null);
+  /** Timestamp of the candle the user clicked, if any. */
+  const [selectedTime, setSelectedTime] = useState<number | null>(null);
 
   /** How many numeric rows are switched on (reserves space at the bottom). */
   const numericRows =
@@ -223,6 +227,35 @@ export default function TradingChart({
       try { ts.unsubscribeVisibleLogicalRangeChange(onRangeChange); } catch { /* disposed */ }
     };
   }, [ready, candles.length]);
+
+  // --- Click to inspect a candle ---
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!ready || !chart) return;
+    const onClick = (param: { time?: unknown }) => {
+      // Clicking empty space (outside any bar) clears the selection.
+      if (param.time == null) {
+        setSelectedTime(null);
+        return;
+      }
+      setSelectedTime(Number(param.time));
+    };
+    chart.subscribeClick(onClick);
+    return () => {
+      if (disposedRef.current) return;
+      try { chart.unsubscribeClick(onClick); } catch { /* disposed */ }
+    };
+  }, [ready]);
+
+  // Selecting a different symbol/timeframe invalidates the selection.
+  useEffect(() => { setSelectedTime(null); }, [datasetKey]);
+
+  const selectedStats: CandleStats | null = useMemo(() => {
+    if (selectedTime == null || candles.length === 0) return null;
+    const candle = candleAtTime(candles, selectedTime);
+    if (!candle) return null;
+    return computeCandleStats(candle, candles, analysis);
+  }, [selectedTime, candles, analysis]);
 
   // --- Data feed (incremental: a refetch must never reset the view) ---
   useEffect(() => {
@@ -985,6 +1018,14 @@ export default function TradingChart({
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
+
+      {selectedStats && (
+        <CandleInspector
+          stats={selectedStats}
+          pricePrecision={pricePrecision}
+          onClose={() => setSelectedTime(null)}
+        />
+      )}
 
       {/* Live price + candle countdown, pinned to the right price axis */}
       {countdown && badgeY != null && (

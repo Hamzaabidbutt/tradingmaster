@@ -25,6 +25,7 @@ import { analyzeVolume } from "./volume";
 import { buildVolumeProfile } from "./volumeProfile";
 import { buildPulse } from "./pulse";
 import { buildMultiWindow } from "./multiWindow";
+import { buildPressureMap } from "./pressureMap";
 
 export interface AnalyzeOptions {
   weights?: Record<string, { weight: number; enabled: boolean }>;
@@ -136,7 +137,7 @@ export function analyzeMarket(
   const candleCloseExpansion = analyzeCandleCloseExpansion(candles, timeframe, deep);
   const rangeTrading = analyzeRangeTrading(candles);
 
-  const core = {
+  const coreForPressure = {
     symbol,
     timeframe,
     price,
@@ -168,6 +169,11 @@ export function analyzeMarket(
     candleCloseExpansion,
     rangeTrading,
   };
+
+  // The pressure map reads liquidity, order-flow events and delta, so it is
+  // built from the assembled core rather than from raw candles alone.
+  const pressureMap = buildPressureMap(candles, coreForPressure);
+  const core = { ...coreForPressure, pressureMap };
 
   const strategyScores = evaluateStrategies(core, opts.weights);
   const { bullishProbability, bearishProbability } = computeConfidence(strategyScores);

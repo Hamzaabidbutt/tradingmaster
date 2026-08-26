@@ -8,7 +8,8 @@ import { analyzeChart } from "@/engines/chartAnalyst";
 import { analyzeCandleCloseExpansion } from "@/engines/candleCloseExpansion";
 import { analyzeRangeTrading } from "@/engines/rangeTrading";
 import { evaluateConfluence } from "@/engines/confluence";
-import { ConfluenceSetup } from "@/engines/types";
+import { detectAccumulation } from "@/engines/accumulation";
+import { AccumulationSetup, ConfluenceSetup } from "@/engines/types";
 
 /**
  * Universe scanner — finds the best setups across every USDT perpetual.
@@ -161,6 +162,81 @@ async function mapLimit<T, R>(
   });
   await Promise.all(runners);
   return results;
+}
+
+/* ------------------------------------------------------------------ *
+ * Accumulation sweep
+ * ------------------------------------------------------------------ */
+
+export interface AccumulationEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: AccumulationSetup;
+}
+
+export interface AccumulationScan {
+  timeframe: string;
+  /** qualifying setups, strongest first */
+  candidates: AccumulationEntry[];
+  /** scored but below threshold — shown so the sweep is auditable */
+  forming: AccumulationEntry[];
+  scanned: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep the universe for coins building an accumulation base.
+ *
+ * Separate from `scanUniverse` because it answers a narrower question: not
+ * "where is the best setup" but "who is defending a level with real buying
+ * behind it". A coin can score poorly on general confluence and still be a
+ * textbook accumulation candidate, and vice versa.
+ */
+export async function scanAccumulation(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<AccumulationScan> {
+  const depth = opts.depth ?? DEFAULT_SCAN_DEPTH;
+  const ranked = (await rankUniverse()).slice(0, depth);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectAccumulation(r.symbol, opts.timeframe, candles),
+    } satisfies AccumulationEntry;
+  });
+
+  const entries: AccumulationEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: AccumulationEntry, b: AccumulationEntry) => b.setup.score - a.setup.score;
+
+  return {
+    timeframe: opts.timeframe,
+    candidates: entries.filter((e) => e.setup.qualified).sort(byScore),
+    forming: entries
+      .filter((e) => !e.setup.qualified && e.setup.grade === "forming")
+      .sort(byScore)
+      .slice(0, 12),
+    scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
 }
 
 export interface ScanOptions {
