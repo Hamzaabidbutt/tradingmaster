@@ -170,6 +170,20 @@ Three things to know about GitHub's scheduler:
   busy. Alerts state how old their spike is, so a late one reads as late rather than as live.
 * **Schedules are disabled after 60 days of repository inactivity**, with an email to the owner.
 
+### Only liquidation spikes, nothing else
+
+The alert channels are shared by every producer — new signals, closures and
+liquidation spikes all land in the same Telegram chat. To receive spikes alone,
+set an allowlist on the host:
+
+```
+ALERT_KINDS="liqspike"
+```
+
+Valid kinds are `signal.opened`, `signal.confluence`, `signal.closed` and
+`liqspike`; leave it unset to receive everything. Once set, *untagged* alerts
+are blocked too, so an allowlist stays one as new alert types are added later.
+
 ### Tuning
 
 Every threshold is an env var (see `.env.example`). The defaults are deliberately strict, because an

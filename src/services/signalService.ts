@@ -174,6 +174,7 @@ export async function maybePersistSignal(analysis: FullAnalysis): Promise<string
       symbol: analysis.symbol,
       side: setup.side,
       confidence: setup.confidence,
+      kind: "signal.opened",
     });
 
     logger.info("signals.created", { id: signal.id, symbol: analysis.symbol, side: setup.side, confidence: setup.confidence });
@@ -275,6 +276,7 @@ export async function maybePersistConfluenceSignal(
       symbol: setup.symbol,
       side,
       confidence: setup.confidence,
+      kind: "signal.confluence",
     });
 
     logger.info("signals.confluence.created", {
@@ -356,6 +358,7 @@ export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed
           ].join("\n"),
           symbol: sig.symbol,
           side: sig.side as "BUY" | "SELL",
+          kind: "signal.closed",
         });
       }
     } catch (err) {

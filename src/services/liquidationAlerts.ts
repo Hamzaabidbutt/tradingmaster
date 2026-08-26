@@ -247,6 +247,7 @@ export function formatSpikeAlert(entry: LiquidationReversalEntry, appUrl?: strin
     // benefits is the buyer. Naming it lets Discord colour the embed.
     side: flush ? "BUY" : "SELL",
     confidence: s.score,
+    kind: "liqspike",
     url: appUrl
       ? `${appUrl.replace(/\/$/, "")}/terminal?symbol=${entry.symbol}&timeframe=${entry.timeframe}`
       : undefined,
