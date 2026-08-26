@@ -480,6 +480,10 @@ export interface LiquidationDeltaResult {
 
 export interface RecentWindowSummary {
   windowMinutes: number;
+  /** span used to define "normal" volume/range — always wider than the window */
+  baselineMinutes: number;
+  /** true when the input series was too short for an honest baseline */
+  baselineDegraded: boolean;
   from: number;
   to: number;
   priceStart: number;
@@ -509,6 +513,8 @@ export interface RecentWindowSummary {
     volumeMultiple: number;
     note: string;
   }[];
+  /** full count before the display cap — scoring used all of them */
+  absorptionTotalCount: number;
   /** the price band that soaked up the bulk of the volume */
   institutionalZones: {
     priceLow: number;
@@ -519,7 +525,9 @@ export interface RecentWindowSummary {
     note: string;
   }[];
   bigTrades: { time: number; price: number; side: "buy" | "sell"; volume: number; multiple: number }[];
+  bigTradesTotalCount: number;
   sweeps: { time: number; price: number; direction: "above" | "below"; note: string }[];
+  sweepsTotalCount: number;
   /** transparent breakdown of what produced the odds */
   factors: { label: string; points: number; detail: string }[];
   bullishOdds: number;
@@ -586,6 +594,367 @@ export interface MultiWindowResult {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Chart Analyst — pattern & price action only
+ *
+ * Deliberately isolated from every other module: no indicators, no order
+ * book, no liquidity/funding/liquidation data. It reads the chart the way a
+ * human does — shapes, candles, and what happened last time the chart
+ * looked like this.
+ * ------------------------------------------------------------------ */
+
+/** A geometric formation fitted over swing highs/lows. */
+export interface ChartShape {
+  name: string;
+  kind:
+    | "ascending_triangle"
+    | "descending_triangle"
+    | "symmetrical_triangle"
+    | "rising_wedge"
+    | "falling_wedge"
+    | "ascending_channel"
+    | "descending_channel"
+    | "rectangle"
+    | "bull_flag"
+    | "bear_flag"
+    | "head_and_shoulders"
+    | "inverse_head_and_shoulders"
+    | "double_top"
+    | "double_bottom";
+  /** the break direction the formation conventionally resolves toward */
+  direction: Bias;
+  /** how complete the formation is, 0-100 */
+  maturity: number;
+  strength: number;
+  upperBoundary: number;
+  lowerBoundary: number;
+  /** measured-move projection if it resolves in its expected direction */
+  measuredTarget: number;
+  startTime: number;
+  note: string;
+}
+
+/** A past stretch of chart whose normalized shape resembles the present. */
+export interface HistoricalAnalogue {
+  startIndex: number;
+  startTime: number;
+  endTime: number;
+  /** 0-100, higher = closer shape match */
+  similarity: number;
+  /** what price did over the bars that followed the match, % */
+  forwardReturnPct: number;
+  forwardDirection: Bias;
+  /** best and worst excursion after the match, % */
+  maxUpPct: number;
+  maxDownPct: number;
+  note: string;
+}
+
+export interface ChartAnalystResult {
+  /** bars used to define the current shape */
+  windowBars: number;
+  /** bars of history actually searched */
+  historyBars: number;
+  currentPattern: {
+    headline: string;
+    candlestick: CandlePattern[];
+    shapes: ChartShape[];
+    priceAction: string[];
+  };
+  historicalMatches: HistoricalAnalogue[];
+  expectedNextMove: {
+    direction: Bias;
+    /** median forward move of the closest analogues, % */
+    magnitudePct: number;
+    /** null when the analogues are too split to project one */
+    target: number | null;
+    /** null when no direction is claimed */
+    invalidation: number | null;
+    horizonBars: number;
+    rationale: string[];
+  };
+  bullishScenario: { trigger: string; target: number; probability: number; note: string };
+  bearishScenario: { trigger: string; target: number; probability: number; note: string };
+  confidence: number;
+  confidenceLabel: "Low" | "Moderate" | "High" | "Very High";
+  patternExplanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Candle Close Expansion — key levels + decisive closes
+ * ------------------------------------------------------------------ */
+
+export interface CandleCloseExpansionResult {
+  keyLevel: {
+    price: number;
+    kind: "support" | "resistance";
+    touches: number;
+    /** touches that closed back away from the level */
+    respects: number;
+    /** share of prior breaks that failed and returned inside, 0-1 */
+    historicalFalseBreakRate: number;
+    note: string;
+  } | null;
+  candleClose: "above" | "below" | "inside";
+  closePrice: number;
+  closeTime: number;
+  breakoutDirection: "bullish" | "bearish" | "none";
+  /** why this close counts (or doesn't) — a crossing alone is never enough */
+  decisiveness: {
+    score: number;
+    /** distance the close travelled beyond the level, in ATR units */
+    penetrationAtr: number;
+    bodyRatio: number;
+    /** where the candle closed inside its own range, 0 = low, 1 = high */
+    closeLocation: number;
+    volumeMultiple: number;
+    followThroughBars: number;
+    verdict: "decisive" | "marginal" | "weak" | "none";
+    checks: { label: string; passed: boolean; detail: string }[];
+  };
+  expansionProbability: "Low" | "Medium" | "High";
+  expansionScore: number;
+  expectedDirection: "up" | "down" | "uncertain";
+  expansionTarget: number | null;
+  invalidationLevel: number | null;
+  reason: string[];
+  /** previous closes through this same level and what followed */
+  historicalPrecedents: {
+    time: number;
+    direction: "above" | "below";
+    decisive: boolean;
+    followThroughPct: number;
+    failed: boolean;
+    note: string;
+  }[];
+  summary: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Range Trading Strategy
+ * ------------------------------------------------------------------ */
+
+export interface RangeTradingResult {
+  marketCondition: "Ranging" | "Trending" | "Unclear";
+  rangeHigh: number | null;
+  rangeLow: number | null;
+  rangeMidpoint: number | null;
+  rangeWidthPct: number | null;
+  /** bars the candidate range spans */
+  rangeBars: number;
+  highTouches: number;
+  lowTouches: number;
+  /** share of bars whose bodies stayed inside the boundaries, 0-1 */
+  containment: number;
+  currentPosition: "Near High" | "Mid Range" | "Near Low" | "Outside";
+  rangeSetup: "Long" | "Short" | "No Trade" | "Breakout";
+  bias: Bias;
+  confidence: number;
+  confidenceLabel: "Low" | "Moderate" | "High" | "Very High";
+  potentialEntry: number | null;
+  /** first target is always the midpoint, second the opposite boundary */
+  target1: number | null;
+  target2: number | null;
+  invalidation: number | null;
+  /** the evidence gates, shown so a rejected range explains itself */
+  validation: { label: string; passed: boolean; detail: string }[];
+  boundaryReactions: {
+    boundary: "high" | "low";
+    time: number;
+    kind: "rejection" | "failed_breakout" | "decisive_close_outside";
+    price: number;
+    note: string;
+  }[];
+  breakout: {
+    active: boolean;
+    direction: "up" | "down" | null;
+    stage: "none" | "attempt" | "confirmed" | "retest" | "false_breakout";
+    note: string;
+  };
+  reason: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Confluence — where the three independent analysts agree
+ *
+ * The three analysts above each read the chart their own way. This layer
+ * asks a different question: do any of them independently point the same
+ * direction, and is that agreement worth acting on?
+ *
+ * Two deliberate properties, both enforced by the shapes below:
+ *   * LONG and SHORT are evaluated as separate, symmetric cases, so the
+ *     structure itself cannot be biased toward one side.
+ *   * NO_TRADE is a first-class decision, not a fallback — an analyst that
+ *     fails its quality gate abstains rather than casting a weak vote.
+ * ------------------------------------------------------------------ */
+
+/** Which analyst spoke, and what kind of evidence it is. */
+export type AnalystKey = "chart" | "candleClose" | "range";
+
+/**
+ * The class of evidence an analyst reads.
+ *
+ * Confluence is scored on the number of *distinct* bases that agree, not the
+ * number of analysts — two modules reading the same kind of evidence are
+ * closer to one opinion counted twice than to genuine confirmation.
+ */
+export type EvidenceBasis = "pattern_history" | "level_close" | "range_boundary";
+
+export type Direction = "long" | "short" | "none";
+
+/** One analyst's position on the current chart, captured at signal time. */
+export interface AnalystVerdict {
+  analyst: AnalystKey;
+  name: string;
+  basis: EvidenceBasis;
+  direction: Direction;
+  /** the analyst's own confidence, 0-100 */
+  confidence: number;
+  /** true when the analyst cleared its quality gate and may contribute */
+  qualified: boolean;
+  /** why it did or didn't qualify — shown, never hidden */
+  gate: string;
+  entry: number | null;
+  target: number | null;
+  invalidation: number | null;
+  /** one line built from this analyst's own numbers, never a template */
+  evidence: string;
+}
+
+/** The case for one direction, built independently of the other. */
+export interface DirectionalCase {
+  direction: "long" | "short";
+  /** 50-97; 50 means no evidence either way */
+  confidence: number;
+  /** pre-squash weighted sum of qualified supporters */
+  rawStrength: number;
+  /** distinct evidence bases supporting this direction */
+  independentBases: number;
+  /** multiplier applied for independent agreement */
+  independenceMultiplier: number;
+  supporters: AnalystVerdict[];
+  /** confidence points removed because qualified analysts pointed the other way */
+  disagreementPenalty: number;
+}
+
+export interface ConfluenceSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  generatedAt: number;
+  /** every analyst's verdict, including the ones that abstained */
+  verdicts: AnalystVerdict[];
+  long: DirectionalCase;
+  short: DirectionalCase;
+  decision: "LONG" | "SHORT" | "NO_TRADE";
+  /** the winning case's confidence, or the higher of the two on NO_TRADE */
+  confidence: number;
+  confidenceLabel: "Low" | "Moderate" | "High" | "Very High";
+  /** populated only when decision is NO_TRADE — which gate failed */
+  noTradeReason: string | null;
+  /** null on NO_TRADE: refusing to quote levels for a trade we won't take */
+  entry: number | null;
+  stopLoss: number | null;
+  target1: number | null;
+  target2: number | null;
+  riskReward: number | null;
+  disagreement: {
+    present: boolean;
+    note: string;
+    penaltyApplied: number;
+  };
+  /** how strong the agreement is, in words */
+  confluenceVerdict: "None" | "Single" | "Partial" | "Strong";
+  /** generated from the actual verdicts above — differs for every setup */
+  explanation: string[];
+  invalidation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Accumulation / reversal detector
+ * ------------------------------------------------------------------ */
+
+export interface AccumulationCriterion {
+  key: string;
+  label: string;
+  met: boolean;
+  /** points contributed toward the 0-100 score */
+  score: number;
+  /** maximum this criterion can contribute */
+  weight: number;
+  detail: string;
+}
+
+export interface AccumulationSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  criteria: AccumulationCriterion[];
+  /** 0-100 weighted total */
+  score: number;
+  /** required criteria all met AND score above threshold */
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  /** the level being defended, when one exists */
+  support: number | null;
+  target: number | null;
+  invalidation: number | null;
+  headline: string;
+  explanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Pressure map — forced buyers and forced sellers
+ * ------------------------------------------------------------------ */
+
+export interface PressureZone {
+  price: number;
+  /** signed % from current price; positive = above */
+  distancePct: number;
+  /** which cohort gets forced out here */
+  side: "long" | "short";
+  /** 0-100 relative heat */
+  intensity: number;
+  /** how this zone was derived — never presented as measured when inferred */
+  basis: "equal_levels" | "swing_liquidity" | "leverage_band";
+  note: string;
+}
+
+export interface WhaleOrder {
+  time: number;
+  price: number;
+  side: "buy" | "sell";
+  volume: number;
+  /** multiple of average bar volume */
+  multiple: number;
+  notional: number;
+  distancePct: number;
+  /** defending = positioned to hold this level; trapped = now offside */
+  posture: "defending" | "trapped";
+  note: string;
+}
+
+export interface PressureMap {
+  price: number;
+  /** stop pools above price — touching them forces buying */
+  shortSqueeze: PressureZone[];
+  /** stop pools below price — touching them forces selling */
+  longSqueeze: PressureZone[];
+  forcedLongLiquidation: PressureZone[];
+  forcedShortLiquidation: PressureZone[];
+  whales: WhaleOrder[];
+  cvdDivergence: {
+    present: boolean;
+    kind: string | null;
+    bias: Bias;
+    strength: number;
+    note: string;
+  };
+  /** which direction the forced flow pulls, weighted by size and proximity */
+  lean: Bias;
+  summary: string[];
+}
+
 export interface StrategyScore {
   key: string;
   name: string;
@@ -593,9 +962,7 @@ export interface StrategyScore {
   score: number;
   weight: number;
   reasons: string[];
-}
-
-export interface TradeSetup {
+}export interface TradeSetup {
   side: "BUY" | "SELL";
   entry: number;
   stopLoss: number;
@@ -641,6 +1008,13 @@ export interface FullAnalysis {
   /** null when 1-minute candles were unavailable */
   pulse: RecentWindowSummary | null;
   multiWindow: MultiWindowResult;
+  pressureMap: PressureMap;
+  /** chart-only read: patterns, price action, historical analogues */
+  chartAnalyst: ChartAnalystResult;
+  /** key levels + decisive candle closes → expansion probability */
+  candleCloseExpansion: CandleCloseExpansionResult;
+  /** range detection and boundary-reaction setups */
+  rangeTrading: RangeTradingResult;
   bias: Bias;
   bullishProbability: number;
   bearishProbability: number;
@@ -701,4 +1075,74 @@ export interface BacktestMetrics {
   monthly: { month: string; pnlPct: number; trades: number }[];
   yearly: { year: string; pnlPct: number; trades: number }[];
   equityCurve: { time: number; equity: number }[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Signal outcome analysis
+ *
+ * Answers, after the fact, *why* a signal worked or didn't — and which
+ * analyst deserves the credit or the blame. The classification is
+ * deliberately coarse and explicit rather than a free-text guess, so the
+ * same reason can be counted across hundreds of signals.
+ * ------------------------------------------------------------------ */
+
+/** How far price actually travelled after entry, in risk multiples. */
+export interface Excursion {
+  /** best move in the signal's favour, as a multiple of initial risk */
+  maxFavourableR: number;
+  /** worst move against the signal, as a multiple of initial risk */
+  maxAdverseR: number;
+  maxFavourablePct: number;
+  maxAdversePct: number;
+  /**
+   * How much of the entry→first-target distance the favourable move covered,
+   * as a percent. 100 means the first target was tagged; 40 means the signal
+   * got 40 % of the way there before failing.
+   *
+   * Measured against TP1 rather than TP3 because TP1 is the target a signal is
+   * actually judged on — a stop-out that reached 90 % of TP1 is a near miss,
+   * while 90 % of TP3 could be a comfortable win. Because both the numerator
+   * and the denominator are distances *from entry*, the figure is identical in
+   * construction for a LONG and a SHORT.
+   *
+   * Nullable, and null is the honest answer in three cases: a legacy row stored
+   * before this field existed, a signal that quoted no first target, and a
+   * target equal to the entry. Not clamped at 100 — a signal that ran past TP1
+   * and then reversed genuinely covered the whole distance, and hiding that
+   * would make a management failure look like a directional one.
+   */
+  targetProgressPct: number | null;
+  /** bars observed between entry and close */
+  bars: number;
+}
+
+export type OutcomeReason =
+  | "target_reached"
+  | "partial_target"
+  /** finished in profit without a target being hit (e.g. expired while up) */
+  | "closed_in_profit"
+  | "false_breakout"
+  | "failed_rejection"
+  | "range_invalidation"
+  | "weak_candle_close"
+  | "unexpected_reversal"
+  | "expired_no_move"
+  | "other";
+
+export interface OutcomeAnalysis {
+  win: boolean;
+  reason: OutcomeReason;
+  /** human-readable label for the reason */
+  reasonLabel: string;
+  /** narrative built from the actual numbers of this trade */
+  detail: string[];
+  /** which confirmation actually played out (success) or held up (failure) */
+  workingConfirmation: string | null;
+  /** the qualified analyst with the largest weighted contribution */
+  topContributor: AnalystKey | null;
+  analystsRight: AnalystKey[];
+  analystsWrong: AnalystKey[];
+  /** analysts that abstained and were vindicated by a loss */
+  analystsAbstained: AnalystKey[];
+  excursion: Excursion;
 }

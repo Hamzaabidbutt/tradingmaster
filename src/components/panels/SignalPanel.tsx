@@ -3,18 +3,20 @@
 import { useState } from "react";
 import { FullAnalysis } from "@/engines/types";
 import { GlassCard } from "@/components/ui/primitives";
+import { useMarketStore } from "@/stores/marketStore";
 import MarketPulse from "./MarketPulse";
 
 /**
  * Signal panel with two views:
  *  • Setup — the active trade setup with reasoning and invalidation
- *  • 5-Min Pulse — a complete conclusion of the last five minutes with
- *    directional odds, most traded prices, absorbed aggression and the
- *    institutional footprint band
+ *  • Pulse — a complete conclusion of the last window (an hour by default,
+ *    switchable to 15m or 5m) with directional odds, most traded prices,
+ *    absorbed aggression and the institutional footprint band
  */
 export default function SignalPanel({ analysis, pricePrecision }: { analysis: FullAnalysis | null; pricePrecision: number }) {
   const [tab, setTab] = useState<"reasoning" | "invalidation" | "strategies">("reasoning");
   const [view, setView] = useState<"setup" | "pulse">("pulse");
+  const { pulseWindowMinutes, setPulseWindow } = useMarketStore();
   const setup = analysis?.setup;
 
   const fmt = (v: number) => v.toFixed(pricePrecision);
@@ -23,13 +25,17 @@ export default function SignalPanel({ analysis, pricePrecision }: { analysis: Fu
     ? Math.max(analysis.pulse.bullishOdds, analysis.pulse.bearishOdds)
     : null;
 
+  // The tab label tracks the window the user actually chose — a hardcoded
+  // "5-Min Pulse" would lie the moment they switched.
+  const pulseLabel = pulseWindowMinutes >= 60 ? "1-Hour Pulse" : `${pulseWindowMinutes}-Min Pulse`;
+
   return (
     <GlassCard
       title={
         <div className="flex w-full items-center gap-1">
           {(
             [
-              ["pulse", "5-Min Pulse"],
+              ["pulse", pulseLabel],
               ["setup", "Setup"],
             ] as const
           ).map(([k, label]) => (
@@ -63,7 +69,12 @@ export default function SignalPanel({ analysis, pricePrecision }: { analysis: Fu
       className="h-full"
     >
       {view === "pulse" ? (
-        <MarketPulse pulse={analysis?.pulse ?? null} pricePrecision={pricePrecision} />
+        <MarketPulse
+          pulse={analysis?.pulse ?? null}
+          pricePrecision={pricePrecision}
+          windowMinutes={pulseWindowMinutes}
+          onWindowChange={setPulseWindow}
+        />
       ) : (
         <SetupView />
       )}

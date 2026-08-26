@@ -8,13 +8,21 @@ import { useTickers } from "@/hooks/useLiveMarket";
 import { MARKETS } from "@/lib/config";
 
 const NAV = [
-  { href: "/", label: "Terminal", icon: "◉" },
-  { href: "/signals", label: "Signals", icon: "⚡" },
+  { href: "/", label: "Dashboard", icon: "🔥" },
+  { href: "/terminal", label: "Terminal", icon: "◉" },
+  { href: "/signals", label: "Signal History", icon: "⚡" },
   { href: "/strategies", label: "Strategies", icon: "🧠" },
   { href: "/backtest", label: "Backtest", icon: "⏱" },
   { href: "/analytics", label: "Analytics", icon: "📊" },
   { href: "/settings", label: "Settings", icon: "⚙" },
 ];
+
+/** Mobile bottom nav has ~44px per item — the full labels do not fit. */
+const SHORT_LABEL: Record<string, string> = {
+  "/": "Setups",
+  "/signals": "History",
+  "/strategies": "Strats",
+};
 
 /** App shell: collapsible sidebar, live ticker strip, mobile bottom nav. */
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -120,12 +128,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex flex-col items-center gap-0.5 px-2 text-[9px] ${
+              className={`flex flex-col items-center gap-0.5 px-1.5 text-[9px] ${
                 active ? "text-neon-cyan" : "text-slate-500"
               }`}
             >
               <span className="text-lg leading-none">{item.icon}</span>
-              {item.label}
+              {SHORT_LABEL[item.href] ?? item.label}
             </Link>
           );
         })}

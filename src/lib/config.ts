@@ -49,6 +49,53 @@ export const FOOTPRINT_SOURCE: Record<Timeframe, Timeframe | null> = {
   "1d": "1h", "1w": "4h", "1M": "1d",
 };
 
+/**
+ * How long a trade is meant to be held — the horizon a signal belongs to.
+ *
+ * This is derived, never stored. A signal already records `estHoldingMin`, and
+ * a second stored copy of the same fact would be free to drift from it. The
+ * vocabulary is deliberately the trader's own rather than the timeframe label:
+ * "4h" says how the chart was sampled, "swing" says what the trade is.
+ */
+export type TradeHorizon = "intraday" | "swing" | "position";
+
+/**
+ * The canonical expected hold for a timeframe, in minutes.
+ *
+ * Twelve bars, matching the multiplier `maybePersistConfluenceSignal` already
+ * applies. Defined here so the timeframe-based and holding-time-based horizon
+ * functions below cannot disagree about where the boundaries fall.
+ */
+export function expectedHoldMinutes(tf: Timeframe): number {
+  return (TIMEFRAME_MINUTES[tf] ?? 60) * 12;
+}
+
+/**
+ * Classify a horizon from an expected holding time.
+ *
+ * One trading day and one month are the two boundaries. They are wide on
+ * purpose: a 4h setup expected to run two days is a swing trade whether it
+ * closes in one day or three, and pretending the cutoff is precise would imply
+ * a confidence the holding estimate does not have.
+ */
+export function horizonForHoldingMinutes(minutes: number): TradeHorizon {
+  if (minutes < TIMEFRAME_MINUTES["1d"]) return "intraday";
+  if (minutes < TIMEFRAME_MINUTES["1d"] * 30) return "swing";
+  return "position";
+}
+
+/** The horizon a timeframe's signals default to, before geometry is known. */
+export function horizonForTimeframe(tf: Timeframe): TradeHorizon {
+  return horizonForHoldingMinutes(expectedHoldMinutes(tf));
+}
+
+/** Display label for a horizon — "Swing trade", not "swing". */
+export const HORIZON_LABEL: Record<TradeHorizon, string> = {
+  intraday: "Intraday",
+  swing: "Swing trade",
+  position: "Position trade",
+};
+
 export function isValidSymbol(symbol: string): boolean {
   return MARKETS.some((m) => m.symbol === symbol);
 }

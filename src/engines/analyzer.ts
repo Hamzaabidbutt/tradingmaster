@@ -1,5 +1,7 @@
 import { ENGINE_DEFAULTS, Timeframe } from "@/lib/config";
+import { analyzeCandleCloseExpansion } from "./candleCloseExpansion";
 import { detectCandlePatterns } from "./candlestick";
+import { analyzeChart } from "./chartAnalyst";
 import { analyzeDelta } from "./deltaAnalysis";
 import { detectDoublePatterns } from "./doublePatterns";
 import { buildFootprint } from "./footprint";
@@ -14,6 +16,7 @@ import { detectOrderBlocks, detectSupplyDemand } from "./orderBlocks";
 import { detectOrderFlowEvents } from "./orderFlowEvents";
 import { analyzeOrderFlow } from "./orderflow";
 import { analyzePremiumDiscount } from "./premiumDiscount";
+import { analyzeRangeTrading } from "./rangeTrading";
 import { buildTradeSetup, computeConfidence } from "./signal";
 import { evaluateStrategies } from "./strategies";
 import { detectSupportResistance } from "./supportResistance";
@@ -22,6 +25,7 @@ import { analyzeVolume } from "./volume";
 import { buildVolumeProfile } from "./volumeProfile";
 import { buildPulse } from "./pulse";
 import { buildMultiWindow } from "./multiWindow";
+import { buildPressureMap } from "./pressureMap";
 
 export interface AnalyzeOptions {
   weights?: Record<string, { weight: number; enabled: boolean }>;
@@ -40,6 +44,13 @@ export interface AnalyzeOptions {
    */
   minuteCandles?: Candle[] | null;
   pulseWindowMinutes?: number;
+  /**
+   * Deep history on the SAME timeframe (thousands of bars), used only by the
+   * Chart Analyst's historical-analogue search and the Candle Close
+   * Expansion analyst's level track record. Optional — both fall back to the
+   * analysis window, which simply yields fewer precedents.
+   */
+  deepCandles?: Candle[] | null;
 }
 
 /**
@@ -103,13 +114,30 @@ export function analyzeMarket(
   // --- Recent-window conclusion (falls back to the chart series when no
   // 1m data is supplied, e.g. inside backtests) ---
   const pulse = buildPulse(opts.minuteCandles ?? candles, {
-    windowMinutes: opts.pulseWindowMinutes ?? 5,
+    windowMinutes: opts.pulseWindowMinutes ?? 60,
   });
 
   // --- Same tape read across several lookbacks (3/5/7/10/12/15 bars) ---
   const multiWindow = buildMultiWindow(candles);
 
-  const core = {
+  /*
+   * --- Independent, chart-only analysts ---
+   *
+   * These three are deliberately display-only: they are read by their own
+   * panels and never feed evaluateStrategies / computeConfidence /
+   * buildTradeSetup, so adding them cannot move the composite signal.
+   *
+   * analyzeChart in particular is passed candles and nothing else — no
+   * indicators, order book, liquidity, funding or liquidation data — which is
+   * what keeps it a genuinely independent second opinion rather than a
+   * restatement of the modules above.
+   */
+  const deep = opts.deepCandles ?? null;
+  const chartAnalyst = analyzeChart(candles, deep);
+  const candleCloseExpansion = analyzeCandleCloseExpansion(candles, timeframe, deep);
+  const rangeTrading = analyzeRangeTrading(candles);
+
+  const coreForPressure = {
     symbol,
     timeframe,
     price,
@@ -137,7 +165,15 @@ export function analyzeMarket(
     liquidationDelta,
     pulse,
     multiWindow,
+    chartAnalyst,
+    candleCloseExpansion,
+    rangeTrading,
   };
+
+  // The pressure map reads liquidity, order-flow events and delta, so it is
+  // built from the assembled core rather than from raw candles alone.
+  const pressureMap = buildPressureMap(candles, coreForPressure);
+  const core = { ...coreForPressure, pressureMap };
 
   const strategyScores = evaluateStrategies(core, opts.weights);
   const { bullishProbability, bearishProbability } = computeConfidence(strategyScores);

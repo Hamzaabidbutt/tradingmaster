@@ -80,7 +80,15 @@ export default function AIInsightPanel({ analysis }: { analysis: FullAnalysis | 
                     {ins.headline}
                   </h4>
                 </div>
-                <time className="shrink-0 font-mono text-[9px] text-slate-600">{timeAgo(ins.time)}</time>
+                {/* Clock time first: "14:32:07" is what you match against the
+                    chart; "3m ago" only says how stale the line is. */}
+                <time
+                  dateTime={new Date(ins.time * 1000).toISOString()}
+                  className="shrink-0 text-right font-mono text-[9px] leading-tight text-slate-500"
+                >
+                  <span className="block text-neon-cyan/70">{clockTime(ins.time)}</span>
+                  <span className="block text-slate-600">{timeAgo(ins.time)}</span>
+                </time>
               </div>
               <p className="pl-3.5 text-[11px] leading-relaxed text-slate-400">{ins.detail}</p>
             </article>
@@ -89,4 +97,14 @@ export default function AIInsightPanel({ analysis }: { analysis: FullAnalysis | 
       </div>
     </GlassCard>
   );
+}
+
+/** Local wall-clock time of an event, to the second. */
+function clockTime(unixSec: number): string {
+  return new Date(unixSec * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }

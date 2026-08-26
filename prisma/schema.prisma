@@ -2,8 +2,17 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// MongoDB (Atlas). The connector requires a replica set, which every Atlas
+// cluster provides; a standalone mongod will not work.
+//
+// Two consequences worth knowing before editing this file:
+//   * There are no migrations. Schema changes ship via `npm run db:push`,
+//     never `prisma migrate` — the migrate engine has no MongoDB support.
+//   * Referential actions (onDelete below) are *emulated by Prisma*, not
+//     enforced by the database. Deleting rows outside Prisma will leave
+//     orphans that the client would have cleaned up.
 datasource db {
-  provider = "mysql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
@@ -28,8 +37,20 @@ enum SignalStatus {
   CANCELLED
 }
 
+/// Which module produced a signal. COMPOSITE is the weighted 28-strategy
+/// ensemble; CONFLUENCE is the three independent chart analysts agreeing.
+enum SignalSource {
+  COMPOSITE
+  CONFLUENCE
+}
+
+// Every `id` below is a cuid mapped onto Mongo's mandatory `_id` rather than a
+// native ObjectId. That keeps the ids identical in shape to the ones the app
+// already generates and stores in signal payloads, so nothing downstream has
+// to learn a second id format.
+
 model User {
-  id          String        @id @default(cuid())
+  id          String        @id @default(cuid()) @map("_id")
   email       String        @unique
   password    String
   name        String?
@@ -42,7 +63,7 @@ model User {
 }
 
 model UserPreference {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String
   key       String
   value     Json
@@ -54,7 +75,7 @@ model UserPreference {
 }
 
 model Signal {
-  id               String       @id @default(cuid())
+  id               String       @id @default(cuid()) @map("_id")
   symbol           String
   timeframe        String
   side             SignalSide
@@ -77,18 +98,73 @@ model Signal {
   closedPrice      Float?
   closedAt         DateTime?
   createdAt        DateTime     @default(now())
+
+  // --- Attribution & outcome (all nullable on purpose) ---
+  //
+  // Prisma's MongoDB connector raises "Inconsistent query result: Field ...
+  // is required to return data, got `null` instead" when a stored document
+  // simply lacks a required field, and `@default` is NOT backfilled on read.
+  // Signals written before this migration have none of these keys, so making
+  // any of them required would break every read of the existing collection.
+  //
+  /// null on signals written before attribution existed — read as COMPOSITE.
+  source           SignalSource?
+  /// AnalystVerdict[] — what each independent analyst said at signal time.
+  /// This is what makes per-analyst win rates measurable rather than assumed.
+  analystVerdicts  Json?
+  /// The full ConfluenceSetup, when source = CONFLUENCE.
+  confluence       Json?
+  /// Machine-readable outcome class, set when the signal closes:
+  /// false_breakout | failed_rejection | range_invalidation | ...
+  outcomeReason    String?
+  /// OutcomeAnalysis — excursion, who was right, biggest contributor.
+  outcomeAnalysis  Json?
+
   learning         LearningRecord[]
 
   @@index([symbol, timeframe])
   @@index([status])
   @@index([createdAt])
+  @@index([source, status])
+  @@index([side, status])
+}
+
+/// Latest confluence verdict per symbol+timeframe.
+///
+/// Upserted rather than appended, so the collection stays bounded at roughly
+/// (universe × timeframes) rows instead of growing without limit — the worker
+/// rewrites the same row every time it revisits a symbol.
+model ScanResult {
+  id          String   @id @default(cuid()) @map("_id")
+  symbol      String
+  timeframe   String
+  /// LONG | SHORT | NO_TRADE
+  decision    String
+  confidence  Float
+  price       Float
+  /// 24h quote volume at scan time — the ranking key for "best setups".
+  quoteVolume Float
+  /// 24h price change at scan time. Nullable: rows written before this field
+  /// existed have no value, and the dashboard prints "—" rather than +0.00%,
+  /// which would read as "flat" instead of "unknown".
+  priceChangePct Float?
+  /// The full ConfluenceSetup so the dashboard can render supporting analysis
+  /// without re-running the engines.
+  setup       Json
+  scannedAt   DateTime @default(now())
+
+  @@unique([symbol, timeframe])
+  @@index([timeframe, decision, confidence])
+  @@index([scannedAt])
 }
 
 model StrategyConfig {
-  id          String   @id @default(cuid())
+  id          String   @id @default(cuid()) @map("_id")
   key         String   @unique
   name        String
-  description String   @db.Text
+  // Was @db.Text under MySQL. MongoDB strings are unbounded, so the
+  // annotation is both unnecessary and rejected by this connector.
+  description String
   enabled     Boolean  @default(true)
   weight      Float    @default(1.0)
   totalTrades Int      @default(0)
@@ -99,7 +175,7 @@ model StrategyConfig {
 }
 
 model Backtest {
-  id          String   @id @default(cuid())
+  id          String   @id @default(cuid()) @map("_id")
   symbol      String
   timeframe   String
   strategyKey String
@@ -113,7 +189,7 @@ model Backtest {
 }
 
 model MarketSnapshot {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   symbol    String
   timeframe String
   price     Float
@@ -124,7 +200,7 @@ model MarketSnapshot {
 }
 
 model LearningRecord {
-  id           String   @id @default(cuid())
+  id           String   @id @default(cuid()) @map("_id")
   signalId     String
   features     Json
   outcome      String
@@ -139,7 +215,7 @@ model LearningRecord {
 }
 
 model AlertChannel {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String
   type      String
   config    Json
@@ -151,7 +227,7 @@ model AlertChannel {
 }
 
 model AuditLog {
-  id        String   @id @default(cuid())
+  id        String   @id @default(cuid()) @map("_id")
   userId    String?
   action    String
   meta      Json
