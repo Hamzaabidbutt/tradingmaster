@@ -1,0 +1,86 @@
+name: Liquidation spike alerts
+
+# Calls the deployed app's alert endpoint on a schedule. The sweep itself runs
+# in your Vercel functions — this workflow only supplies the clock, because a
+# serverless app has nothing running between page loads.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   APP_URL      https://your-app.vercel.app   (no trailing slash)
+#   CRON_SECRET  the same value set in the app's environment
+#
+# Two GitHub scheduling facts worth knowing before relying on this:
+#   * five minutes is the floor, and the queue drifts under load — a run can
+#     land 10-15 minutes late. Each alert states how old its spike is, so a
+#     late alert reads as late rather than as live.
+#   * GitHub disables scheduled workflows in repositories with no activity for
+#     60 days, and emails the owner when it does.
+
+on:
+  schedule:
+    # Every 5 minutes — the resolution of the 5m bars the alerts read. Faster
+    # would re-read the same closed candles at full Binance weight cost.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Evaluate and report without sending or recording anything"
+        type: boolean
+        default: true
+
+# A slow sweep must not have a second run pile up behind it.
+concurrency:
+  group: liquidation-alerts
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check configuration
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::APP_URL and CRON_SECRET must both be set as repository secrets."
+            exit 1
+          fi
+
+      - name: Sweep for liquidation spikes
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DRY: ${{ inputs.dry_run && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          url="${APP_URL%/}/api/alerts/liquidations?dry=${DRY}"
+
+          # The secret goes in a header, never the URL: query strings end up in
+          # access logs and in this job's own output.
+          # --max-time sits above the function's own 60s limit so a slow sweep
+          # is reported by the app rather than cut off here.
+          body=$(mktemp)
+          code=$(curl -sS --max-time 90 -o "$body" -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "$url")
+
+          echo "HTTP $code"
+          cat "$body"
+          echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::Alert sweep failed with HTTP $code"
+            exit 1
+          fi
+
+          # Surface the run on the workflow summary page, so the history is
+          # readable without opening each job.
+          {
+            echo "### Liquidation spike sweep"
+            echo ""
+            echo '```json'
+            cat "$body"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

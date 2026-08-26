@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "worker": "tsx scripts/worker.ts",
+    "telegram:chat-id": "tsx scripts/telegramChatId.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma db push",
     "db:push": "prisma db push",
