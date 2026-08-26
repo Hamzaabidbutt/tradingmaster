@@ -139,9 +139,32 @@ Something has to call the endpoint; the app is serverless and nothing runs betwe
 
 | Option | Granularity | Notes |
 | --- | --- | --- |
-| `npm run worker` | `LIQ_ALERT_INTERVAL_SEC` (default 300s) | Best. Already in the repo, needs an always-on host (Railway/Fly/Render/VPS). |
+| **GitHub Actions** (shipped) | 5 min | Free, works on a Vercel Hobby plan, secret stays in repo secrets. See below. |
+| `npm run worker` | `LIQ_ALERT_INTERVAL_SEC` (default 300s) | Best latency, but needs an always-on host (Railway/Fly/Render/VPS). |
 | Vercel Cron | 1 min on **Pro**, once a day on Hobby | Add a `crons` entry to `vercel.json`; Vercel sends `CRON_SECRET` as a bearer token automatically. |
-| GitHub Actions / cron-job.org | ~5 min | Works on Hobby. Actions cron can drift by several minutes under load. |
+| cron-job.org / Upstash QStash | 1 min | Free tiers. Send the secret as a header, not in the URL — query strings land in access logs. |
+
+#### GitHub Actions (the shipped default)
+
+`.github/workflows/liquidation-alerts.yml` calls the endpoint every five minutes. Add two
+repository secrets under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `APP_URL` | `https://your-app.vercel.app` (no trailing slash) |
+| `CRON_SECRET` | the same value as in the app's environment |
+
+Then run it once by hand from the **Actions** tab — the `Run workflow` button takes a `dry_run`
+flag, which defaults to true, so the first run reports what it *would* send without sending
+anything. The JSON summary appears on the run page.
+
+Three things to know about GitHub's scheduler:
+
+* **Scheduled workflows only run from the default branch.** Nothing fires until this file is merged
+  to `main`, however many times you push it to a feature branch.
+* **Five minutes is the floor, and it drifts.** A run can land 10–15 minutes late when GitHub is
+  busy. Alerts state how old their spike is, so a late one reads as late rather than as live.
+* **Schedules are disabled after 60 days of repository inactivity**, with an email to the owner.
 
 ### Tuning
 
