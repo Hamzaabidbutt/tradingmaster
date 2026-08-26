@@ -49,12 +49,108 @@ export interface SpikeGate {
 export const DEFAULT_GATE: SpikeGate = {
   minScore: 70,
   requireForced: true,
-  // Three bars on a 5m sweep is fifteen minutes. Beyond that the reversal this
-  // alert exists to catch has either happened without you or is not coming.
-  maxBarsAgo: 3,
+  /**
+   * Six bars on a 5m sweep is half an hour.
+   *
+   * This was three, chosen on the theory that beyond fifteen minutes the
+   * reversal has happened without you. That reasoning assumed a punctual
+   * sweep, and no free scheduler is punctual — GitHub's cron drops and delays
+   * runs freely, so a window narrower than the gap between sweeps makes most
+   * spikes structurally unreachable: they age out in the silence between two
+   * runs and are never once seen while fresh.
+   *
+   * The window therefore has to exceed the *worst* realistic sweep gap, not
+   * the best. Every message states the spike's age, so a 25-minute-old print
+   * arrives labelled as one and the reader can judge it.
+   */
+  maxBarsAgo: 6,
   minReversalPct: 0.4,
   maxPerRun: 5,
 };
+
+/**
+ * Why the gate rejected what it rejected.
+ *
+ * Counted by *first* failing condition, in the same order the gate applies
+ * them, so the number that stands out names the binding constraint. Without
+ * this, a run reporting "20 qualified, 0 eligible" gives no way to tell an
+ * over-strict threshold from a genuinely quiet market, and tuning becomes
+ * guesswork against a market that has moved on by the next run.
+ */
+export interface RejectionCounts {
+  notQualified: number;
+  lowScore: number;
+  notForced: number;
+  stale: number;
+  noReversal: number;
+  /** passed everything but fell outside maxPerRun */
+  overCap: number;
+}
+
+/** The rejected spike that came closest to passing, for context in the log. */
+export interface NearestMiss {
+  symbol: string;
+  score: number;
+  barsAgo: number;
+  reversalPct: number;
+  forced: string;
+  /** the first condition it failed */
+  failed: keyof RejectionCounts;
+}
+
+function firstFailure(
+  entry: LiquidationReversalEntry,
+  gate: SpikeGate
+): keyof RejectionCounts | null {
+  const s = entry.setup;
+  if (!s.qualified || !s.spike) return "notQualified";
+  if (s.score < gate.minScore) return "lowScore";
+  if (gate.requireForced && s.forced === "unlikely") return "notForced";
+  if (s.spike.barsAgo > gate.maxBarsAgo) return "stale";
+  if (s.reversalPct < gate.minReversalPct) return "noReversal";
+  return null;
+}
+
+export function explainRejections(
+  entries: LiquidationReversalEntry[],
+  gate: SpikeGate = DEFAULT_GATE
+): { counts: RejectionCounts; nearest: NearestMiss | null } {
+  const counts: RejectionCounts = {
+    notQualified: 0,
+    lowScore: 0,
+    notForced: 0,
+    stale: 0,
+    noReversal: 0,
+    overCap: 0,
+  };
+  let nearest: NearestMiss | null = null;
+  let passed = 0;
+
+  for (const entry of entries) {
+    const failed = firstFailure(entry, gate);
+    if (!failed) {
+      passed++;
+      continue;
+    }
+    counts[failed]++;
+    // "Closest" is by score among things that at least qualified — the
+    // rejects worth knowing about are strong setups caught by one threshold,
+    // not coins that were never candidates.
+    const s = entry.setup;
+    if (failed !== "notQualified" && (!nearest || s.score > nearest.score)) {
+      nearest = {
+        symbol: entry.symbol,
+        score: s.score,
+        barsAgo: s.spike?.barsAgo ?? -1,
+        reversalPct: s.reversalPct,
+        forced: s.forced,
+        failed,
+      };
+    }
+  }
+  counts.overCap = Math.max(0, passed - gate.maxPerRun);
+  return { counts, nearest };
+}
 
 export function gateFromEnv(): SpikeGate {
   const num = (key: string, fallback: number) => {
@@ -82,15 +178,12 @@ export function selectAlertable(
   entries: LiquidationReversalEntry[],
   gate: SpikeGate = DEFAULT_GATE
 ): LiquidationReversalEntry[] {
+  // Shares `firstFailure` with the diagnostics rather than restating the
+  // conditions. Two copies of a threshold list drift the moment one is tuned,
+  // and the failure mode here is silent: the log would then explain rejections
+  // the gate never actually made.
   return entries
-    .filter((e) => {
-      const s = e.setup;
-      if (!s.qualified || !s.spike) return false;
-      if (s.score < gate.minScore) return false;
-      if (gate.requireForced && s.forced === "unlikely") return false;
-      if (s.spike.barsAgo > gate.maxBarsAgo) return false;
-      return s.reversalPct >= gate.minReversalPct;
-    })
+    .filter((e) => firstFailure(e, gate) === null)
     .sort((a, b) => b.setup.score - a.setup.score)
     .slice(0, gate.maxPerRun);
 }
@@ -242,6 +335,12 @@ export interface SpikeAlertRun {
   sent: number;
   symbols: string[];
   channelsConfigured: boolean;
+  /** why the gate rejected what it rejected — see `explainRejections` */
+  rejected: RejectionCounts;
+  /** the strongest spike that failed one threshold, and which one */
+  nearest: NearestMiss | null;
+  /** the thresholds this run actually applied, so the log is self-describing */
+  gate: SpikeGate;
   error?: string;
 }
 
@@ -289,6 +388,9 @@ export async function runLiquidationSpikeAlerts(
     sent: 0,
     symbols: [],
     channelsConfigured,
+    rejected: { notQualified: 0, lowScore: 0, notForced: 0, stale: 0, noReversal: 0, overCap: 0 },
+    nearest: null,
+    gate,
   };
 
   let scan;
@@ -307,6 +409,13 @@ export async function runLiquidationSpikeAlerts(
 
   const eligible = selectAlertable(qualified, gate);
   run.eligible = eligible.length;
+
+  // Explained over every scanned entry, not just the qualifying ones, so a
+  // quiet market and an over-strict threshold are distinguishable.
+  const explained = explainRejections([...qualified, ...scan.watching], gate);
+  run.rejected = explained.counts;
+  run.nearest = explained.nearest;
+
   if (eligible.length === 0) return run;
 
   const cooling = await symbolsInCooldown(cooldownMinutes);
