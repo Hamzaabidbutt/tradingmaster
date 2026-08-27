@@ -5,19 +5,20 @@ import { CandleStats } from "@/engines/candleStats";
 // One definition, in the layer that persists it — a second copy here would be
 // free to drift from what is actually written to storage.
 import type { InspectorPosition } from "@/stores/marketStore";
+import { clampPosition, nextPosition, samePosition } from "./dragGeometry";
 
 /** Where the card sits before anyone drags it — the old fixed corner. */
 export const DEFAULT_INSPECTOR_POSITION: InspectorPosition = { x: 8, y: 8 };
 
-/** Keep a position inside its container, so a resize cannot strand the card. */
-function clamp(pos: InspectorPosition, card: HTMLElement): InspectorPosition {
+/** Measure the card and the box it is positioned within. */
+function measure(card: HTMLElement) {
   const parent = card.offsetParent as HTMLElement | null;
-  if (!parent) return pos;
-  const maxX = Math.max(0, parent.clientWidth - card.offsetWidth);
-  const maxY = Math.max(0, parent.clientHeight - card.offsetHeight);
+  const cardRect = card.getBoundingClientRect();
+  const parentRect = parent?.getBoundingClientRect();
   return {
-    x: Math.min(Math.max(0, pos.x), maxX),
-    y: Math.min(Math.max(0, pos.y), maxY),
+    card: { width: cardRect.width, height: cardRect.height },
+    container: { width: parentRect?.width ?? 0, height: parentRect?.height ?? 0 },
+    origin: { x: parentRect?.left ?? 0, y: parentRect?.top ?? 0 },
   };
 }
 
@@ -62,7 +63,7 @@ export default function CandleInspector({
 
   const cardRef = useRef<HTMLDivElement>(null);
   /** Cursor offset within the card when the drag began. */
-  const grabRef = useRef<{ dx: number; dy: number } | null>(null);
+  const grabRef = useRef<InspectorPosition | null>(null);
   const pos = position ?? DEFAULT_INSPECTOR_POSITION;
 
   /**
@@ -77,8 +78,9 @@ export default function CandleInspector({
     const parent = card?.offsetParent as HTMLElement | null;
     if (!card || !parent || !onMove) return;
     const observer = new ResizeObserver(() => {
-      const next = clamp(pos, card);
-      if (next.x !== pos.x || next.y !== pos.y) onMove(next);
+      const m = measure(card);
+      const next = clampPosition(pos, m.card, m.container);
+      if (!samePosition(next, pos)) onMove(next);
     });
     observer.observe(parent);
     return () => observer.disconnect();
@@ -86,28 +88,29 @@ export default function CandleInspector({
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const card = cardRef.current;
+    // `e.button` is 0 for touch and pen as well as a left click, so this
+    // rejects only a genuine right/middle mouse press.
     if (!card || e.button !== 0) return;
     const rect = card.getBoundingClientRect();
-    grabRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    grabRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     // Capture on the handle so the drag survives the cursor outrunning the
     // card, and so releasing outside the chart still ends it.
     e.currentTarget.setPointerCapture(e.pointerId);
+    // Stops the browser turning the gesture into a text selection or a scroll,
+    // and stops lightweight-charts underneath treating it as a chart drag.
     e.preventDefault();
+    e.stopPropagation();
   }, []);
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       const card = cardRef.current;
       const grab = grabRef.current;
-      const parent = card?.offsetParent as HTMLElement | null;
-      if (!card || !grab || !parent || !onMove) return;
-      const parentRect = parent.getBoundingClientRect();
-      onMove(
-        clamp(
-          { x: e.clientX - parentRect.left - grab.dx, y: e.clientY - parentRect.top - grab.dy },
-          card
-        )
-      );
+      if (!card || !grab || !onMove) return;
+      const m = measure(card);
+      onMove(nextPosition({ x: e.clientX, y: e.clientY }, grab, m.origin, m.card, m.container));
+      e.preventDefault();
+      e.stopPropagation();
     },
     [onMove]
   );
@@ -176,8 +179,10 @@ export default function CandleInspector({
       style={{ left: pos.x, top: pos.y }}
     >
       <div
-        className={`mb-2 flex items-center justify-between gap-2 ${
-          onMove ? "pointer-events-auto cursor-move select-none" : ""
+        className={`-m-1 mb-1.5 flex items-center justify-between gap-2 rounded-lg p-1 ${
+          onMove
+            ? "pointer-events-auto cursor-move select-none touch-none hover:bg-white/[0.06]"
+            : ""
         }`}
         onPointerDown={onMove ? onPointerDown : undefined}
         onPointerMove={onMove ? onPointerMove : undefined}
@@ -197,6 +202,11 @@ export default function CandleInspector({
             {when.toLocaleDateString()} {when.toLocaleTimeString()}
           </div>
         </div>
+        {onMove && (
+          <span aria-hidden className="ml-auto mr-1 text-[11px] leading-none text-slate-600">
+            ⠿
+          </span>
+        )}
         {live && (
           <span
             className="rounded bg-neon-cyan/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-neon-cyan"
