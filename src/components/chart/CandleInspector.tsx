@@ -10,25 +10,27 @@ import { CandleStats } from "@/engines/candleStats";
  * not cover render as "—" instead of zero, because zero forced flow and *no
  * data about* forced flow mean very different things.
  *
- * Two layouts, chosen by the pointer rather than by the viewport width:
+ * Shown only while a candle is actually under the pointer. An always-visible
+ * panel is always covering something, and every cure for that — dragging it,
+ * shrinking it, moving it to a corner — is work in service of a problem that
+ * disappears if the panel simply leaves when it has nothing to describe.
  *
- *  * **Card** (mouse) — the full breakdown, parked in the top-left corner.
- *    There is a cursor to move it out from under, so it can afford the space.
- *  * **Strip** (touch) — one wrapping line pinned across the top. A phone has
- *    no cursor to move away, so the card would sit permanently over the chart
- *    with nothing the user could do about it. The strip carries the same
- *    figures in a band the candles can be read around.
+ * Two layouts, chosen by the pointer rather than by the viewport width, since
+ * what differs is the interaction and not the screen size:
+ *
+ *  * **Card** (mouse) — the full breakdown in the top-left. It appears while
+ *    the cursor is over a bar and goes when the cursor does.
+ *  * **Strip** (touch) — one wrapping line across the top, shown while a
+ *    finger is on a candle. A phone has no hover state to lean on, so a card
+ *    of this size would have to be dismissed rather than simply left.
  */
 export default function CandleInspector({
   stats,
   pricePrecision,
-  live,
   compact,
 }: {
   stats: CandleStats;
   pricePrecision: number;
-  /** true when the cursor is off the chart and this is the newest bar */
-  live?: boolean;
   /** render the touch-friendly strip instead of the full card */
   compact?: boolean;
 }) {
@@ -42,7 +44,6 @@ export default function CandleInspector({
           {stats.bullish ? "▲" : "▼"} {stats.changePct >= 0 ? "+" : ""}
           {stats.changePct.toFixed(2)}%
         </span>
-        {live && <span className="text-[8px] uppercase tracking-wider text-neon-cyan">live</span>}
         <span className="text-slate-500">
           {when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
@@ -82,6 +83,9 @@ export default function CandleInspector({
   }
 
   return (
+    // pointer-events-none throughout: the card sits over the candles, and a
+    // solid block would swallow the crosshair that drives it — the readings
+    // would freeze exactly where the card is.
     <div className="pointer-events-none absolute left-2 top-2 z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
@@ -95,14 +99,6 @@ export default function CandleInspector({
             {when.toLocaleDateString()} {when.toLocaleTimeString()}
           </div>
         </div>
-        {live && (
-          <span
-            className="rounded bg-neon-cyan/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-neon-cyan"
-            title="No candle hovered — showing the most recent bar"
-          >
-            live
-          </span>
-        )}
       </div>
 
       <div className="grid grid-cols-2 gap-1">

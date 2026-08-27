@@ -1,7 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
 import MarketSelector from "@/components/layout/MarketSelector";
 import AIInsightPanel from "@/components/panels/AIInsightPanel";
@@ -26,6 +27,7 @@ import { useCandleCountdown } from "@/hooks/useCandleCountdown";
 import { useSymbols } from "@/hooks/useSymbols";
 import { useMarketStore } from "@/stores/marketStore";
 import { Candle } from "@/engines/types";
+import { isValidTimeframe } from "@/lib/config";
 import { fetchKlinesDirect } from "@/lib/marketClient";
 
 const TradingChart = dynamic(() => import("@/components/chart/TradingChart"), {
@@ -38,9 +40,46 @@ const TradingChart = dynamic(() => import("@/components/chart/TradingChart"), {
 /**
  * The trading terminal: live chart with SMC overlays, AI analyst feed,
  * signal engine, order flow, liquidations, structure and key levels.
+ *
+ * `useSearchParams` needs a Suspense boundary, or the prerender of this
+ * statically-rendered route bails out.
  */
 export default function TerminalPage() {
-  const { symbol, timeframe, overlays, pulseWindowMinutes } = useMarketStore();
+  return (
+    <Suspense
+      fallback={
+        <AppShell>
+          <p className="p-4 text-sm text-slate-500">Loading terminal…</p>
+        </AppShell>
+      }
+    >
+      <Terminal />
+    </Suspense>
+  );
+}
+
+/** Symbols are uppercase alphanumerics; anything else came from a mangled link. */
+const SYMBOL_RE = /^[A-Z0-9]{4,20}$/;
+
+function Terminal() {
+  const { symbol, timeframe, overlays, pulseWindowMinutes, setSymbol, setTimeframe } =
+    useMarketStore();
+  const searchParams = useSearchParams();
+
+  /**
+   * Adopt `?symbol=` / `?timeframe=` from the URL.
+   *
+   * This is what makes a terminal link work at all — from a scanner opening a
+   * new tab, from a Telegram alert, or from a bookmark. Keyed on the query
+   * string alone, so switching coin inside the app is never reverted by a
+   * stale param.
+   */
+  useEffect(() => {
+    const wanted = searchParams.get("symbol")?.toUpperCase();
+    if (wanted && SYMBOL_RE.test(wanted)) setSymbol(wanted);
+    const tf = searchParams.get("timeframe");
+    if (tf && isValidTimeframe(tf)) setTimeframe(tf);
+  }, [searchParams, setSymbol, setTimeframe]);
   const { precisionFor } = useSymbols();
   const pricePrecision = precisionFor(symbol);
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);

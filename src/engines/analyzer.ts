@@ -104,7 +104,10 @@ export function analyzeMarket(
 
   // --- Liquidations ---
   const liquidations = analyzeLiquidations(candles);
-  const liquidationDelta = analyzeLiquidationDelta(candles);
+  // Sub-candles make forced-flow detection independent of the chart's own
+  // timeframe: without them a cascade shorter than one bar is diluted below
+  // the threshold and vanishes when the user switches from 5m to 15m.
+  const liquidationDelta = analyzeLiquidationDelta(candles, 60, opts.subCandles ?? null);
 
   // --- Classic indicators ---
   const movingAverages = computeMovingAverages(candles);

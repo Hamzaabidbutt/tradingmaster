@@ -6,6 +6,23 @@ import { logger } from "./logger";
  * Browser notifications are handled client-side from the signal feed.
  */
 
+/**
+ * What produced an alert.
+ *
+ * Every channel is shared, so without this every subscriber gets everything:
+ * a phone set up to catch liquidation spikes also buzzes for each new signal
+ * and each closure, which is how a useful channel becomes one people mute.
+ */
+export type AlertKind =
+  /** a new composite-engine signal was opened */
+  | "signal.opened"
+  /** a new confluence-scanner signal was opened */
+  | "signal.confluence"
+  /** a signal reached its final target, stopped out or expired */
+  | "signal.closed"
+  /** forced flow printed at an extreme */
+  | "liqspike";
+
 export interface AlertPayload {
   title: string;
   body: string;
@@ -13,9 +30,47 @@ export interface AlertPayload {
   side?: "BUY" | "SELL";
   confidence?: number;
   url?: string;
+  kind?: AlertKind;
+}
+
+/**
+ * The kinds allowed through, from `ALERT_KINDS` (comma-separated).
+ *
+ * Unset means everything, which is the historical behaviour and the right
+ * default — a fresh install should not silently drop alerts it was never told
+ * to filter.
+ */
+function enabledKinds(): string[] | null {
+  const raw = process.env.ALERT_KINDS;
+  if (!raw) return null;
+  const kinds = raw.split(",").map((k) => k.trim()).filter(Boolean);
+  return kinds.length > 0 ? kinds : null;
+}
+
+/**
+ * True when this payload should be delivered.
+ *
+ * An *untagged* payload is blocked whenever an allowlist exists. Letting it
+ * through would defeat the point: someone who sets ALERT_KINDS=liqspike wants
+ * only liquidation spikes, including from code added later that nobody
+ * remembered to tag. The dropped alert is logged so it is discoverable rather
+ * than mysterious.
+ */
+export function shouldDispatch(payload: AlertPayload): boolean {
+  const enabled = enabledKinds();
+  if (!enabled) return true;
+  return payload.kind != null && enabled.includes(payload.kind);
 }
 
 export async function dispatchAlert(payload: AlertPayload): Promise<void> {
+  if (!shouldDispatch(payload)) {
+    logger.debug("alerts.filtered", {
+      kind: payload.kind ?? "untagged",
+      symbol: payload.symbol,
+      allowed: process.env.ALERT_KINDS,
+    });
+    return;
+  }
   await Promise.allSettled([
     sendTelegram(payload),
     sendDiscord(payload),

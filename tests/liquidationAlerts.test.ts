@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GATE,
   alertKey,
+  explainRejections,
   formatSpikeAlert,
   selectAlertable,
 } from "@/services/liquidationAlerts";
@@ -157,5 +158,88 @@ describe("alert message", () => {
   it("builds a terminal link, and omits it when no base URL is configured", () => {
     expect(payload.url).toBe("https://example.app/terminal?symbol=BTCUSDT&timeframe=5m");
     expect(formatSpikeAlert(entry()).url).toBeUndefined();
+  });
+});
+
+describe("rejection diagnostics", () => {
+  it("names the binding threshold rather than just counting failures", () => {
+    const { counts } = explainRejections(
+      [
+        entry({ score: 50 }),
+        entry({ spike: { barsAgo: 20 } as never }, "BBBUSDT"),
+        entry({ spike: { barsAgo: 25 } as never }, "CCCUSDT"),
+        entry({ reversalPct: 0.1 }, "DDDUSDT"),
+      ],
+      DEFAULT_GATE
+    );
+    // Two stale is the number that stands out, which is the point.
+    expect(counts.stale).toBe(2);
+    expect(counts.lowScore).toBe(1);
+    expect(counts.noReversal).toBe(1);
+    expect(counts.notQualified).toBe(0);
+  });
+
+  it("attributes each entry to its FIRST failure only", () => {
+    // Low score AND stale AND no reversal — counted once, under the first.
+    const { counts } = explainRejections(
+      [entry({ score: 20, reversalPct: 0, spike: { barsAgo: 30 } as never })],
+      DEFAULT_GATE
+    );
+    expect(counts.lowScore).toBe(1);
+    expect(counts.stale).toBe(0);
+    expect(counts.noReversal).toBe(0);
+  });
+
+  it("reports the strongest near miss and what stopped it", () => {
+    const { nearest } = explainRejections(
+      [
+        entry({ score: 72, spike: { barsAgo: 20 } as never }, "AAAUSDT"),
+        entry({ score: 95, spike: { barsAgo: 18 } as never }, "BBBUSDT"),
+      ],
+      DEFAULT_GATE
+    );
+    expect(nearest?.symbol).toBe("BBBUSDT");
+    expect(nearest?.failed).toBe("stale");
+    expect(nearest?.barsAgo).toBe(18);
+  });
+
+  it("ignores coins that were never candidates when picking the near miss", () => {
+    // A non-qualifying setup is not a near miss however high it scores; it was
+    // never in the running.
+    const { counts, nearest } = explainRejections(
+      [entry({ qualified: false, score: 99 })],
+      DEFAULT_GATE
+    );
+    expect(counts.notQualified).toBe(1);
+    expect(nearest).toBeNull();
+  });
+
+  it("counts what the per-run cap discarded", () => {
+    const many = Array.from({ length: 8 }, (_, i) => entry({}, `SYM${i}USDT`));
+    const { counts } = explainRejections(many, { ...DEFAULT_GATE, maxPerRun: 5 });
+    expect(counts.overCap).toBe(3);
+  });
+
+  it("agrees with the gate — nothing is explained that was not rejected", () => {
+    const batch = [
+      entry({ score: 50 }, "AUSDT"),
+      entry({}, "BUSDT"),
+      entry({ spike: { barsAgo: 20 } as never }, "CUSDT"),
+      entry({}, "DUSDT"),
+    ];
+    const passed = selectAlertable(batch, DEFAULT_GATE).length;
+    const { counts } = explainRejections(batch, DEFAULT_GATE);
+    const rejected = counts.notQualified + counts.lowScore + counts.notForced + counts.stale + counts.noReversal;
+    expect(passed + rejected).toBe(batch.length);
+  });
+});
+
+describe("default gate", () => {
+  it("tolerates a sweep that arrives late", () => {
+    // The freshness window has to exceed the worst realistic gap between
+    // sweeps, or spikes age out unseen in the silence between two runs.
+    expect(DEFAULT_GATE.maxBarsAgo).toBeGreaterThanOrEqual(6);
+    const late = entry({ spike: { barsAgo: 6 } as never });
+    expect(selectAlertable([late], DEFAULT_GATE)).toHaveLength(1);
   });
 });
