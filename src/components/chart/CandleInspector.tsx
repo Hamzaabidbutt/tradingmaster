@@ -1,26 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
 import { CandleStats } from "@/engines/candleStats";
-// One definition, in the layer that persists it — a second copy here would be
-// free to drift from what is actually written to storage.
-import type { InspectorPosition } from "@/stores/marketStore";
-import { clampPosition, nextPosition, samePosition } from "./dragGeometry";
-
-/** Where the card sits before anyone drags it — the old fixed corner. */
-export const DEFAULT_INSPECTOR_POSITION: InspectorPosition = { x: 8, y: 8 };
-
-/** Measure the card and the box it is positioned within. */
-function measure(card: HTMLElement) {
-  const parent = card.offsetParent as HTMLElement | null;
-  const cardRect = card.getBoundingClientRect();
-  const parentRect = parent?.getBoundingClientRect();
-  return {
-    card: { width: cardRect.width, height: cardRect.height },
-    container: { width: parentRect?.width ?? 0, height: parentRect?.height ?? 0 },
-    origin: { x: parentRect?.left ?? 0, y: parentRect?.top ?? 0 },
-  };
-}
 
 /**
  * Detail card for the candle under the cursor.
@@ -30,97 +10,32 @@ function measure(card: HTMLElement) {
  * not cover render as "—" instead of zero, because zero forced flow and *no
  * data about* forced flow mean very different things.
  *
- * Two layouts, chosen by the pointer rather than by the viewport width:
+ * Shown only while a candle is actually under the pointer. An always-visible
+ * panel is always covering something, and every cure for that — dragging it,
+ * shrinking it, moving it to a corner — is work in service of a problem that
+ * disappears if the panel simply leaves when it has nothing to describe.
  *
- *  * **Card** (mouse) — the full breakdown, parked in the top-left corner.
- *    There is a cursor to move it out from under, so it can afford the space.
- *  * **Strip** (touch) — one wrapping line pinned across the top. A phone has
- *    no cursor to move away, so the card would sit permanently over the chart
- *    with nothing the user could do about it. The strip carries the same
- *    figures in a band the candles can be read around.
+ * Two layouts, chosen by the pointer rather than by the viewport width, since
+ * what differs is the interaction and not the screen size:
+ *
+ *  * **Card** (mouse) — the full breakdown in the top-left. It appears while
+ *    the cursor is over a bar and goes when the cursor does.
+ *  * **Strip** (touch) — one wrapping line across the top, shown while a
+ *    finger is on a candle. A phone has no hover state to lean on, so a card
+ *    of this size would have to be dismissed rather than simply left.
  */
 export default function CandleInspector({
   stats,
   pricePrecision,
-  live,
   compact,
-  position,
-  onMove,
 }: {
   stats: CandleStats;
   pricePrecision: number;
-  /** true when the cursor is off the chart and this is the newest bar */
-  live?: boolean;
   /** render the touch-friendly strip instead of the full card */
   compact?: boolean;
-  /** where the card sits, in px from the chart's top-left */
-  position?: InspectorPosition | null;
-  /** called as the card is dragged, and with null on a reset */
-  onMove?: (pos: InspectorPosition | null) => void;
 }) {
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
-
-  const cardRef = useRef<HTMLDivElement>(null);
-  /** Cursor offset within the card when the drag began. */
-  const grabRef = useRef<InspectorPosition | null>(null);
-  const pos = position ?? DEFAULT_INSPECTOR_POSITION;
-
-  /**
-   * Re-clamp when the chart resizes.
-   *
-   * A card dragged to the right edge of a wide window would otherwise sit
-   * outside a narrow one — visible in the DOM, invisible on screen, and with
-   * no way to drag it back.
-   */
-  useEffect(() => {
-    const card = cardRef.current;
-    const parent = card?.offsetParent as HTMLElement | null;
-    if (!card || !parent || !onMove) return;
-    const observer = new ResizeObserver(() => {
-      const m = measure(card);
-      const next = clampPosition(pos, m.card, m.container);
-      if (!samePosition(next, pos)) onMove(next);
-    });
-    observer.observe(parent);
-    return () => observer.disconnect();
-  }, [pos, onMove]);
-
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const card = cardRef.current;
-    // `e.button` is 0 for touch and pen as well as a left click, so this
-    // rejects only a genuine right/middle mouse press.
-    if (!card || e.button !== 0) return;
-    const rect = card.getBoundingClientRect();
-    grabRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    // Capture on the handle so the drag survives the cursor outrunning the
-    // card, and so releasing outside the chart still ends it.
-    e.currentTarget.setPointerCapture(e.pointerId);
-    // Stops the browser turning the gesture into a text selection or a scroll,
-    // and stops lightweight-charts underneath treating it as a chart drag.
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      const card = cardRef.current;
-      const grab = grabRef.current;
-      if (!card || !grab || !onMove) return;
-      const m = measure(card);
-      onMove(nextPosition({ x: e.clientX, y: e.clientY }, grab, m.origin, m.card, m.container));
-      e.preventDefault();
-      e.stopPropagation();
-    },
-    [onMove]
-  );
-
-  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    grabRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-  }, []);
 
   if (compact) {
     return (
@@ -129,7 +44,6 @@ export default function CandleInspector({
           {stats.bullish ? "▲" : "▼"} {stats.changePct >= 0 ? "+" : ""}
           {stats.changePct.toFixed(2)}%
         </span>
-        {live && <span className="text-[8px] uppercase tracking-wider text-neon-cyan">live</span>}
         <span className="text-slate-500">
           {when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
@@ -169,28 +83,11 @@ export default function CandleInspector({
   }
 
   return (
-    // The card itself stays transparent to the mouse: anything interactive
-    // here sits over the candles, and a solid 248px block would kill the
-    // crosshair — and with it the very readings the card exists to show —
-    // wherever it happened to be parked. Only the handle takes events.
-    <div
-      ref={cardRef}
-      className="pointer-events-none absolute z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
-      style={{ left: pos.x, top: pos.y }}
-    >
-      <div
-        className={`-m-1 mb-1.5 flex items-center justify-between gap-2 rounded-lg p-1 ${
-          onMove
-            ? "pointer-events-auto cursor-move select-none touch-none hover:bg-white/[0.06]"
-            : ""
-        }`}
-        onPointerDown={onMove ? onPointerDown : undefined}
-        onPointerMove={onMove ? onPointerMove : undefined}
-        onPointerUp={onMove ? endDrag : undefined}
-        onPointerCancel={onMove ? endDrag : undefined}
-        onDoubleClick={onMove ? () => onMove(null) : undefined}
-        title={onMove ? "Drag to move · double-click to reset" : undefined}
-      >
+    // pointer-events-none throughout: the card sits over the candles, and a
+    // solid block would swallow the crosshair that drives it — the readings
+    // would freeze exactly where the card is.
+    <div className="pointer-events-none absolute left-2 top-2 z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <div>
           <div
             className={`font-mono text-[11px] font-bold ${stats.bullish ? "text-bull" : "text-bear"}`}
@@ -202,19 +99,6 @@ export default function CandleInspector({
             {when.toLocaleDateString()} {when.toLocaleTimeString()}
           </div>
         </div>
-        {onMove && (
-          <span aria-hidden className="ml-auto mr-1 text-[11px] leading-none text-slate-600">
-            ⠿
-          </span>
-        )}
-        {live && (
-          <span
-            className="rounded bg-neon-cyan/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-neon-cyan"
-            title="No candle hovered — showing the most recent bar"
-          >
-            live
-          </span>
-        )}
       </div>
 
       <div className="grid grid-cols-2 gap-1">

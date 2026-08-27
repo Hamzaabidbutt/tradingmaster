@@ -16,7 +16,7 @@ import {
   createChart,
 } from "lightweight-charts";
 import { Candle, FullAnalysis, OrderWallResult } from "@/engines/types";
-import { InspectorPosition, OverlayToggles } from "@/stores/marketStore";
+import { OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
@@ -36,9 +36,6 @@ interface Props {
   livePrice?: number | null;
   /** resting order-book walls; null when both wall overlays are off */
   walls?: OrderWallResult | null;
-  /** where the inspector card has been dragged to; null = its default corner */
-  inspectorPos?: InspectorPosition | null;
-  onInspectorMove?: (pos: InspectorPosition | null) => void;
 }
 
 const BULL = "#00e5a0";
@@ -67,8 +64,6 @@ export default function TradingChart({
   countdown,
   livePrice,
   walls,
-  inspectorPos,
-  onInspectorMove,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -302,12 +297,18 @@ export default function TradingChart({
     };
   }, [ready]);
 
+  /**
+   * Stats for the candle under the cursor, or null when there is none.
+   *
+   * Deliberately blank rather than falling back to the newest bar. A card that
+   * is always on screen is always covering something, and the cure for that —
+   * letting the user drag it out of the way — is machinery in service of a
+   * problem that only exists because the card outstays its welcome. Showing it
+   * only while a candle is actually being pointed at removes both.
+   */
   const inspectorStats: CandleStats | null = useMemo(() => {
-    if (candles.length === 0) return null;
-    // With the cursor off the chart, show the newest bar — the same thing
-    // Binance does, so the panel is never blank while the market moves.
-    const candle =
-      hoveredTime == null ? candles[candles.length - 1] : candleAtTime(candles, hoveredTime);
+    if (candles.length === 0 || hoveredTime == null) return null;
+    const candle = candleAtTime(candles, hoveredTime);
     if (!candle) return null;
     return computeCandleStats(candle, candles, analysis);
   }, [hoveredTime, candles, analysis]);
@@ -1132,12 +1133,9 @@ export default function TradingChart({
 
       {overlays.candleInspector && inspectorStats && (
         <CandleInspector
-          live={hoveredTime == null}
           compact={coarsePointer}
           stats={inspectorStats}
           pricePrecision={pricePrecision}
-          position={inspectorPos}
-          onMove={onInspectorMove}
         />
       )}
 
