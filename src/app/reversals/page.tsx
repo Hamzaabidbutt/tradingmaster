@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { GlassCard, timeAgo } from "@/components/ui/primitives";
 import { EmptyNote, ScanTimeframe, SCAN_TIMEFRAMES, useOpenInTerminal } from "@/components/dashboard/shared";
+import AccumulationScanner from "@/components/dashboard/AccumulationScanner";
 import { ZoneReaction, ZoneReversalSetup } from "@/engines/types";
 
 interface Entry {
@@ -179,6 +180,15 @@ export default function ReversalsPage() {
             )}
           </div>
         </GlassCard>
+
+        {/*
+          Accumulation belongs beside zone reversals, not on the dashboard.
+          Both answer the same question from different evidence — "is this
+          coin turning?" — one from a zone being defended, the other from a
+          base being built. The dashboard answers "where is the best setup",
+          which is a different question and was the wrong home for it.
+        */}
+        <AccumulationScanner />
       </div>
     </AppShell>
   );

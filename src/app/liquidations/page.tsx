@@ -5,6 +5,7 @@ import AppShell from "@/components/layout/AppShell";
 import { GlassCard, timeAgo } from "@/components/ui/primitives";
 import { EmptyNote, ScanTimeframe, SCAN_TIMEFRAMES, useOpenInTerminal } from "@/components/dashboard/shared";
 import { LiquidationReversalSetup } from "@/engines/types";
+import CascadeRiskScanner from "@/components/dashboard/CascadeRiskScanner";
 
 interface Entry {
   symbol: string;
@@ -182,6 +183,16 @@ export default function LiquidationsPage() {
             )}
           </div>
         </GlassCard>
+
+        {/*
+          The two halves of the same subject: above, cascades that have already
+          fired and the reversal they produced; below, where the next one would
+          begin and how crowded that side is. Kept on one page because reading
+          either without the other invites the wrong conclusion — a spike list
+          with nothing loaded behind it, or a risk map with no sense of what
+          just discharged.
+        */}
+        <CascadeRiskScanner />
       </div>
     </AppShell>
   );
@@ -289,6 +300,14 @@ function SpikeRow({
           <span className="font-mono text-[10px] text-slate-600">
             peak {s.peakReversalPct.toFixed(2)}%
           </span>
+          {s.spike && (
+            <span
+              className="font-mono text-[10px] text-slate-400"
+              title={`Spike bar opened ${localDateTime(s.spike.time)} (your local time)`}
+            >
+              🕒 {localTime(s.spike.time)}
+            </span>
+          )}
           <span className="ml-auto text-[9px] text-slate-600">{open ? "▲" : "▼"}</span>
         </div>
         <p className="mt-0.5 text-[10px] text-slate-400">{s.headline}</p>
@@ -297,6 +316,7 @@ function SpikeRow({
       {open && (
         <div className="animate-slide-up border-t border-white/5 px-2.5 py-2">
           <div className="mb-2 grid grid-cols-2 gap-1.5 font-mono text-[10px] sm:grid-cols-4">
+            <Cell label="Spike at" value={s.spike ? localDateTime(s.spike.time) : "—"} />
             <Cell label="Price" value={fmt(s.price)} />
             <Cell
               label={flush ? "Flush low" : "Squeeze high"}
@@ -339,4 +359,24 @@ function Cell({ label, value, tone }: { label: string; value: string; tone?: "bu
 
 function fmt(v: number): string {
   return v.toFixed(v >= 1000 ? 1 : v >= 1 ? 4 : 6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+/**
+ * The spike's own clock time, in the reader's timezone.
+ *
+ * "3 bars ago" tells you the age; this tells you *when*, which is what you
+ * need to line the event up against your chart, your notes, or another
+ * exchange. Rendered from the bar's unix time, so it is local wherever it is
+ * read rather than fixed to the server's zone.
+ */
+function localTime(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function localDateTime(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }

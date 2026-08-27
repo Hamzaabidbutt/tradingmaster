@@ -1298,3 +1298,58 @@ export interface OrderWallResult {
   sampledAt: number;
   summary: string[];
 }
+
+/* ------------------------------------------------------------------ *
+ * Cascade risk — where forced flow would trigger, and how loaded it is
+ * ------------------------------------------------------------------ */
+
+export interface CascadeTrigger {
+  /** the level that would start it */
+  price: number;
+  /** signed % from current price; negative = below */
+  distancePct: number;
+  /** distance in ATR units — 2% is imminent on one coin and remote on another */
+  distanceAtr: number;
+  /** which cohort gets forced out here */
+  side: "long" | "short";
+  /**
+   * How this level was derived. Never presented as measured:
+   * `leverage_band` is arithmetic on an assumed entry, not a book of real
+   * positions, and is the weakest of the three.
+   */
+  basis: "leverage_band" | "stop_pool" | "equal_levels";
+  note: string;
+}
+
+export interface CascadeFuel {
+  /** % change in open interest over the observed window */
+  openInterestChangePct: number | null;
+  /** price change over the same window, for the divergence read */
+  priceChangePct: number;
+  /** which cohort has been building, inferred from OI against price */
+  crowded: "long" | "short" | "balanced" | "unknown";
+  /** open interest is falling — positions closing, fuel draining */
+  unwinding: boolean;
+  note: string;
+}
+
+export interface CascadeRiskSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  /** the side most at risk of being forced out, or "none" */
+  side: "long" | "short" | "none";
+  /** nearest trigger on the at-risk side */
+  trigger: CascadeTrigger | null;
+  /** every trigger found, nearest first */
+  triggers: CascadeTrigger[];
+  fuel: CascadeFuel;
+  /** true when a large flush already fired recently — fuel largely spent */
+  recentlyDischarged: boolean;
+  /** 0-100 how loaded the conditions are. NOT a probability. */
+  score: number;
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  headline: string;
+  explanation: string[];
+}

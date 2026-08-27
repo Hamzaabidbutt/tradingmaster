@@ -1,5 +1,5 @@
 import { cacheGet, cacheSet } from "@/lib/cache";
-import { fetchAllTickers, fetchKlines } from "@/lib/binance";
+import { fetchAllTickers, fetchKlines, fetchOpenInterestHist } from "@/lib/binance";
 import { fetchFuturesSymbols } from "@/lib/symbols";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/db";
@@ -11,8 +11,10 @@ import { evaluateConfluence } from "@/engines/confluence";
 import { detectAccumulation } from "@/engines/accumulation";
 import { detectZoneReversal } from "@/engines/zoneReversal";
 import { detectLiquidationReversal } from "@/engines/liquidationReversal";
+import { detectCascadeRisk } from "@/engines/cascadeRisk";
 import {
   AccumulationSetup,
+  CascadeRiskSetup,
   ConfluenceSetup,
   LiquidationReversalSetup,
   ZoneReversalSetup,
@@ -384,19 +386,124 @@ export async function scanLiquidationReversals(opts: {
     else failed++;
   }
 
+  /**
+   * Newest spike first.
+   *
+   * Ranking by score would bury a cascade that printed two minutes ago under
+   * a stronger one from an hour back — and for an event whose whole value is
+   * catching the reversal, recency *is* the ranking. Score ties are broken by
+   * score so the order is total and stable.
+   */
+  const byRecency = (a: LiquidationReversalEntry, b: LiquidationReversalEntry) => {
+    const at = a.setup.spike?.time ?? 0;
+    const bt = b.setup.spike?.time ?? 0;
+    return bt - at || b.setup.score - a.setup.score;
+  };
   const byScore = (a: LiquidationReversalEntry, b: LiquidationReversalEntry) =>
     b.setup.score - a.setup.score;
   const qualified = entries.filter((e) => e.setup.qualified);
 
   return {
     timeframe: opts.timeframe,
-    bottoms: qualified.filter((e) => e.setup.location === "bottom").sort(byScore),
-    tops: qualified.filter((e) => e.setup.location === "top").sort(byScore),
+    bottoms: qualified.filter((e) => e.setup.location === "bottom").sort(byRecency),
+    tops: qualified.filter((e) => e.setup.location === "top").sort(byRecency),
     // A spike that has not reversed is still worth seeing — it is the same
     // event one bar earlier, and hiding it would mean the panel only ever
     // shows moves that already happened.
     watching: entries
       .filter((e) => !e.setup.qualified && e.setup.spike !== null && e.setup.forced !== "unlikely")
+      .sort(byScore)
+      .slice(0, 12),
+    scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Cascade risk sweep
+ * ------------------------------------------------------------------ */
+
+export interface CascadeRiskEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: CascadeRiskSetup;
+}
+
+export interface CascadeRiskScan {
+  timeframe: string;
+  /** crowded longs with a trigger below — a flush would start there */
+  longFlush: CascadeRiskEntry[];
+  /** crowded shorts with a trigger above */
+  shortSqueeze: CascadeRiskEntry[];
+  /** loaded but not yet close enough, or fuel draining */
+  forming: CascadeRiskEntry[];
+  scanned: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for coins where the conditions for a cascade are loaded.
+ *
+ * Costs one extra request per symbol over the other sweeps: open interest is
+ * the only public series that says which side is crowded, and without it the
+ * scan can locate triggers but cannot tell you whether anything is resting on
+ * them. Depth defaults lower here for that reason.
+ *
+ * Nothing in the result claims a cascade *will* happen — see the header of
+ * `cascadeRisk.ts`. The lists are ordered by how loaded the setup is.
+ */
+export async function scanCascadeRisk(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<CascadeRiskScan> {
+  const ranked = (await rankUniverse()).slice(0, opts.depth ?? 60);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const [candles, oi] = await Promise.all([
+      fetchKlines(r.symbol, opts.timeframe, SCAN_BARS),
+      // Best-effort: a symbol with no OI history still yields trigger levels,
+      // and the engine reports the positioning read as unknown rather than
+      // inventing one.
+      fetchOpenInterestHist(r.symbol, "15m", 48).catch(() => []),
+    ]);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectCascadeRisk(
+        r.symbol,
+        opts.timeframe,
+        candles,
+        oi.length > 0 ? oi.map((p) => p.openInterest) : null
+      ),
+    } satisfies CascadeRiskEntry;
+  });
+
+  const entries: CascadeRiskEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: CascadeRiskEntry, b: CascadeRiskEntry) => b.setup.score - a.setup.score;
+  const qualified = entries.filter((e) => e.setup.qualified);
+
+  return {
+    timeframe: opts.timeframe,
+    longFlush: qualified.filter((e) => e.setup.side === "long").sort(byScore),
+    shortSqueeze: qualified.filter((e) => e.setup.side === "short").sort(byScore),
+    forming: entries
+      .filter((e) => !e.setup.qualified && e.setup.grade === "forming")
       .sort(byScore)
       .slice(0, 12),
     scanned: entries.length,
