@@ -1,6 +1,25 @@
 "use client";
 
+import { useCallback, useEffect, useRef } from "react";
 import { CandleStats } from "@/engines/candleStats";
+// One definition, in the layer that persists it — a second copy here would be
+// free to drift from what is actually written to storage.
+import type { InspectorPosition } from "@/stores/marketStore";
+
+/** Where the card sits before anyone drags it — the old fixed corner. */
+export const DEFAULT_INSPECTOR_POSITION: InspectorPosition = { x: 8, y: 8 };
+
+/** Keep a position inside its container, so a resize cannot strand the card. */
+function clamp(pos: InspectorPosition, card: HTMLElement): InspectorPosition {
+  const parent = card.offsetParent as HTMLElement | null;
+  if (!parent) return pos;
+  const maxX = Math.max(0, parent.clientWidth - card.offsetWidth);
+  const maxY = Math.max(0, parent.clientHeight - card.offsetHeight);
+  return {
+    x: Math.min(Math.max(0, pos.x), maxX),
+    y: Math.min(Math.max(0, pos.y), maxY),
+  };
+}
 
 /**
  * Detail card for the candle under the cursor.
@@ -24,6 +43,8 @@ export default function CandleInspector({
   pricePrecision,
   live,
   compact,
+  position,
+  onMove,
 }: {
   stats: CandleStats;
   pricePrecision: number;
@@ -31,9 +52,72 @@ export default function CandleInspector({
   live?: boolean;
   /** render the touch-friendly strip instead of the full card */
   compact?: boolean;
+  /** where the card sits, in px from the chart's top-left */
+  position?: InspectorPosition | null;
+  /** called as the card is dragged, and with null on a reset */
+  onMove?: (pos: InspectorPosition | null) => void;
 }) {
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
+
+  const cardRef = useRef<HTMLDivElement>(null);
+  /** Cursor offset within the card when the drag began. */
+  const grabRef = useRef<{ dx: number; dy: number } | null>(null);
+  const pos = position ?? DEFAULT_INSPECTOR_POSITION;
+
+  /**
+   * Re-clamp when the chart resizes.
+   *
+   * A card dragged to the right edge of a wide window would otherwise sit
+   * outside a narrow one — visible in the DOM, invisible on screen, and with
+   * no way to drag it back.
+   */
+  useEffect(() => {
+    const card = cardRef.current;
+    const parent = card?.offsetParent as HTMLElement | null;
+    if (!card || !parent || !onMove) return;
+    const observer = new ResizeObserver(() => {
+      const next = clamp(pos, card);
+      if (next.x !== pos.x || next.y !== pos.y) onMove(next);
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [pos, onMove]);
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const card = cardRef.current;
+    if (!card || e.button !== 0) return;
+    const rect = card.getBoundingClientRect();
+    grabRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+    // Capture on the handle so the drag survives the cursor outrunning the
+    // card, and so releasing outside the chart still ends it.
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const card = cardRef.current;
+      const grab = grabRef.current;
+      const parent = card?.offsetParent as HTMLElement | null;
+      if (!card || !grab || !parent || !onMove) return;
+      const parentRect = parent.getBoundingClientRect();
+      onMove(
+        clamp(
+          { x: e.clientX - parentRect.left - grab.dx, y: e.clientY - parentRect.top - grab.dy },
+          card
+        )
+      );
+    },
+    [onMove]
+  );
+
+  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    grabRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
 
   if (compact) {
     return (
@@ -82,8 +166,26 @@ export default function CandleInspector({
   }
 
   return (
-    <div className="pointer-events-none absolute left-2 top-2 z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl">
-      <div className="mb-2 flex items-center justify-between gap-2">
+    // The card itself stays transparent to the mouse: anything interactive
+    // here sits over the candles, and a solid 248px block would kill the
+    // crosshair — and with it the very readings the card exists to show —
+    // wherever it happened to be parked. Only the handle takes events.
+    <div
+      ref={cardRef}
+      className="pointer-events-none absolute z-20 w-[248px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
+      style={{ left: pos.x, top: pos.y }}
+    >
+      <div
+        className={`mb-2 flex items-center justify-between gap-2 ${
+          onMove ? "pointer-events-auto cursor-move select-none" : ""
+        }`}
+        onPointerDown={onMove ? onPointerDown : undefined}
+        onPointerMove={onMove ? onPointerMove : undefined}
+        onPointerUp={onMove ? endDrag : undefined}
+        onPointerCancel={onMove ? endDrag : undefined}
+        onDoubleClick={onMove ? () => onMove(null) : undefined}
+        title={onMove ? "Drag to move · double-click to reset" : undefined}
+      >
         <div>
           <div
             className={`font-mono text-[11px] font-bold ${stats.bullish ? "text-bull" : "text-bear"}`}

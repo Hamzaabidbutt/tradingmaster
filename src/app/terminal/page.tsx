@@ -40,7 +40,8 @@ const TradingChart = dynamic(() => import("@/components/chart/TradingChart"), {
  * signal engine, order flow, liquidations, structure and key levels.
  */
 export default function TerminalPage() {
-  const { symbol, timeframe, overlays, pulseWindowMinutes } = useMarketStore();
+  const { symbol, timeframe, overlays, pulseWindowMinutes, inspectorPos, setInspectorPos } =
+    useMarketStore();
   const { precisionFor } = useSymbols();
   const pricePrecision = precisionFor(symbol);
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);
@@ -157,6 +158,8 @@ export default function TerminalPage() {
               countdown={formatted}
               livePrice={price}
               walls={walls}
+              inspectorPos={inspectorPos}
+              onInspectorMove={setInspectorPos}
             />
           </div>
         </div>

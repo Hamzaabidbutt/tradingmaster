@@ -43,6 +43,12 @@ export interface OverlayToggles {
   cvd: boolean;
 }
 
+/** Where the candle inspector card has been dragged to, in px from the chart's top-left. */
+export interface InspectorPosition {
+  x: number;
+  y: number;
+}
+
 /** Market Pulse conclusion window, in minutes. */
 export type PulseWindow = 5 | 15 | 60;
 
@@ -53,11 +59,14 @@ interface MarketState {
   sidebarCollapsed: boolean;
   /** how far back the Market Pulse box concludes over */
   pulseWindowMinutes: PulseWindow;
+  /** null until the user drags the inspector; then remembered across sessions */
+  inspectorPos: InspectorPosition | null;
   setSymbol: (s: string) => void;
   setTimeframe: (tf: Timeframe) => void;
   toggleOverlay: (key: keyof OverlayToggles) => void;
   toggleSidebar: () => void;
   setPulseWindow: (m: PulseWindow) => void;
+  setInspectorPos: (p: InspectorPosition | null) => void;
 }
 
 export const useMarketStore = create<MarketState>()(
@@ -99,12 +108,14 @@ export const useMarketStore = create<MarketState>()(
       // An hour of 1m candles reads market sentiment far more steadily than
       // five minutes, which is mostly noise.
       pulseWindowMinutes: 60,
+      inspectorPos: null,
       setSymbol: (symbol) => set({ symbol }),
       setTimeframe: (timeframe) => set({ timeframe }),
       toggleOverlay: (key) =>
         set((s) => ({ overlays: { ...s.overlays, [key]: !s.overlays[key] } })),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setPulseWindow: (pulseWindowMinutes) => set({ pulseWindowMinutes }),
+      setInspectorPos: (inspectorPos) => set({ inspectorPos }),
     }),
     {
       name: "tm-market",

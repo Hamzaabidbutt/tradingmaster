@@ -16,7 +16,7 @@ import {
   createChart,
 } from "lightweight-charts";
 import { Candle, FullAnalysis, OrderWallResult } from "@/engines/types";
-import { OverlayToggles } from "@/stores/marketStore";
+import { InspectorPosition, OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
@@ -36,6 +36,9 @@ interface Props {
   livePrice?: number | null;
   /** resting order-book walls; null when both wall overlays are off */
   walls?: OrderWallResult | null;
+  /** where the inspector card has been dragged to; null = its default corner */
+  inspectorPos?: InspectorPosition | null;
+  onInspectorMove?: (pos: InspectorPosition | null) => void;
 }
 
 const BULL = "#00e5a0";
@@ -64,6 +67,8 @@ export default function TradingChart({
   countdown,
   livePrice,
   walls,
+  inspectorPos,
+  onInspectorMove,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -1131,6 +1136,8 @@ export default function TradingChart({
           compact={coarsePointer}
           stats={inspectorStats}
           pricePrecision={pricePrecision}
+          position={inspectorPos}
+          onMove={onInspectorMove}
         />
       )}
 
