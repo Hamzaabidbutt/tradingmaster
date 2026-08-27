@@ -1,8 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback } from "react";
-import { useMarketStore } from "@/stores/marketStore";
 import { isValidTimeframe } from "@/lib/config";
 import { AnalystKey, AnalystVerdict, OutcomeReason } from "@/engines/types";
 
@@ -136,25 +134,33 @@ export function opponentsOf(verdicts: AnalystVerdict[], side: "BUY" | "SELL"): A
 }
 
 /**
- * Open a coin in the terminal.
+ * Link to a coin on the terminal.
  *
- * The store is persisted, so setting the symbol before routing means the
- * terminal mounts already pointed at it rather than loading the previous coin
- * and then switching — which would cost a wasted round of analysis fetches.
+ * The coin travels in the URL rather than in the persisted store. The store is
+ * shared by every tab, so writing to it to "hand over" a symbol would also
+ * change whatever the user already had open elsewhere — and a link that only
+ * works because of a side effect cannot be copied, bookmarked or sent to
+ * anyone. The same URL is what the alert messages link to.
+ */
+export function terminalHref(symbol: string, timeframe?: string): string {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
+  if (timeframe && isValidTimeframe(timeframe)) params.set("timeframe", timeframe);
+  return `/terminal?${params.toString()}`;
+}
+
+/**
+ * Open a coin in the terminal, in a new tab.
+ *
+ * A scan is a list you work through: following a setup in the same tab loses
+ * the list and the scroll position, and the sweep is expensive enough that
+ * re-running it to get back is a real cost.
+ *
+ * `noopener` because the new tab has no business reaching back into this one.
  */
 export function useOpenInTerminal() {
-  const router = useRouter();
-  const setSymbol = useMarketStore((s) => s.setSymbol);
-  const setTimeframe = useMarketStore((s) => s.setTimeframe);
-
-  return useCallback(
-    (symbol: string, timeframe?: string) => {
-      setSymbol(symbol);
-      if (timeframe && isValidTimeframe(timeframe)) setTimeframe(timeframe);
-      router.push("/terminal");
-    },
-    [router, setSymbol, setTimeframe]
-  );
+  return useCallback((symbol: string, timeframe?: string) => {
+    window.open(terminalHref(symbol, timeframe), "_blank", "noopener,noreferrer");
+  }, []);
 }
 
 export function SideBadge({ side }: { side: "LONG" | "SHORT" }) {
