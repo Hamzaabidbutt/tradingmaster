@@ -471,6 +471,18 @@ export interface LiquidationDeltaResult {
   netDelta: number;
   cumulative: number;
   dominantSide: "long" | "short" | "balanced";
+  /**
+   * How the forced volume was derived.
+   *
+   * `sub_candle` — detected on lower-timeframe candles and summed into these
+   *   bars, so a cascade shows up at the same size whatever timeframe is on
+   *   screen.
+   * `estimated`  — detected on these bars directly. Fast events shorter than
+   *   one bar are diluted by the ordinary trade around them and can fall under
+   *   the threshold entirely, which is why the same spike can appear on 5m and
+   *   be absent on 15m.
+   */
+  fidelity: "sub_candle" | "estimated";
   summary: string[];
 }
 
