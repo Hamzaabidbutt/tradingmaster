@@ -73,6 +73,11 @@ export default function OrderFlowEventsPanel({ analysis }: { analysis: FullAnaly
               )}
           </div>
 
+          {/* Is there actually a setup on the table right now? The events above
+              are evidence; this line is the verdict they feed, and without it
+              the panel reads as interesting rather than actionable. */}
+          <SetupStrip analysis={analysis} />
+
           {ev.deltaSpikeLevels.length > 0 && (
             <div className="border-t border-white/5 px-3 py-2">
               <div className="mb-1 text-[9px] uppercase tracking-wider text-slate-500">
@@ -222,4 +227,66 @@ function mergeEvents(
   }
 
   return out.sort((a, b) => b.time - a.time).slice(0, 24);
+}
+
+
+/**
+ * One line: is a setup live, and is price still where you could take it?
+ *
+ * "Live" is not the same as "exists". The engine can hold a valid LONG whose
+ * entry ran away twenty minutes ago — still a correct read, no longer a trade.
+ * Both facts are shown, because acting on the first without the second is the
+ * most expensive way to misread this panel.
+ */
+function SetupStrip({ analysis }: { analysis: FullAnalysis }) {
+  const setup = analysis.setup;
+
+  if (!setup) {
+    return (
+      <div className="flex items-center gap-2 border-t border-white/5 px-3 py-2">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-slate-600" />
+        <span className="text-[10px] uppercase tracking-wider text-slate-500">
+          No setup live
+        </span>
+        <span className="text-[10px] text-slate-600">
+          The order flow above is context, not a trade — nothing currently clears the engine&apos;s
+          confidence gate.
+        </span>
+      </div>
+    );
+  }
+
+  const long = setup.side === "BUY";
+  const price = analysis.price;
+  // Still takeable when price has not travelled past the entry in the trade's
+  // own direction by more than a fifth of the distance to the first target.
+  const room = Math.abs(setup.tp1 - setup.entry);
+  const drift = long ? price - setup.entry : setup.entry - price;
+  const stillOffered = room > 0 ? drift <= room * 0.2 : false;
+  const invalidated = long ? price <= setup.stopLoss : price >= setup.stopLoss;
+
+  const tone = invalidated
+    ? { dot: "bg-bear", text: "text-bear", label: "Invalidated" }
+    : stillOffered
+      ? { dot: "bg-bull animate-pulse", text: "text-bull", label: "Setup live" }
+      : { dot: "bg-neon-amber", text: "text-neon-amber", label: "Live, entry passed" };
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-white/5 px-3 py-2">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
+      <span className={`text-[10px] font-semibold uppercase tracking-wider ${tone.text}`}>
+        {tone.label}
+      </span>
+      <span className={`font-mono text-[10px] ${long ? "text-bull" : "text-bear"}`}>
+        {long ? "LONG" : "SHORT"} {setup.confidence}% · {setup.confidenceLabel}
+      </span>
+      <span className="font-mono text-[10px] text-slate-500">
+        entry {setup.entry} · stop {setup.stopLoss} · tp1 {setup.tp1}
+      </span>
+      <span className="font-mono text-[10px] text-slate-600">
+        {drift >= 0 ? "+" : ""}
+        {room > 0 ? ((drift / room) * 100).toFixed(0) : "0"}% of the way to TP1
+      </span>
+    </div>
+  );
 }

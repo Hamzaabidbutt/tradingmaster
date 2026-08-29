@@ -6,18 +6,30 @@ import { StoryLine } from "@/engines/candleStory";
 import type { InspectorPosition } from "@/stores/marketStore";
 import { clampPosition, nextPosition, samePosition } from "./dragGeometry";
 
-/** Where the card sits before anyone drags it. */
-export const DEFAULT_INSPECTOR_POSITION: InspectorPosition = { x: 8, y: 8 };
+/**
+ * Where the card sits before anyone drags it, in viewport pixels.
+ *
+ * Below the ticker strip rather than hard against the corner, so the default
+ * position does not sit on top of the navigation.
+ */
+export const DEFAULT_INSPECTOR_POSITION: InspectorPosition = { x: 16, y: 96 };
 
-/** Measure the card and the box it is positioned within. */
+/**
+ * Measure the card against the **viewport**, not the chart.
+ *
+ * The card is `position: fixed`, so it can be dragged anywhere on screen —
+ * onto a second monitor's worth of page, over the panels below, wherever it is
+ * out of the way. Clamping it to the chart would have made "drag it out of the
+ * way" mean "drag it to a different part of the thing you are trying to see".
+ */
 function measure(card: HTMLElement) {
-  const parent = card.offsetParent as HTMLElement | null;
   const cardRect = card.getBoundingClientRect();
-  const parentRect = parent?.getBoundingClientRect();
   return {
     card: { width: cardRect.width, height: cardRect.height },
-    container: { width: parentRect?.width ?? 0, height: parentRect?.height ?? 0 },
-    origin: { x: parentRect?.left ?? 0, y: parentRect?.top ?? 0 },
+    container: { width: window.innerWidth, height: window.innerHeight },
+    // Fixed positioning is already viewport-relative, so there is no offset
+    // to subtract.
+    origin: { x: 0, y: 0 },
   };
 }
 
@@ -84,19 +96,18 @@ export default function CandleInspector({
   const [storyOpen, setStoryOpen] = useState(true);
   const pos = position ?? DEFAULT_INSPECTOR_POSITION;
 
-  // Re-clamp on resize so a card dragged to the edge of a wide window is not
-  // stranded off-screen in a narrow one, with no way to drag it back.
+  // Re-clamp when the window resizes, so a card parked at the edge of a wide
+  // window is not stranded off-screen in a narrow one with no way back.
   useEffect(() => {
     const card = cardRef.current;
-    const parent = card?.offsetParent as HTMLElement | null;
-    if (!card || !parent || !onMove) return;
-    const observer = new ResizeObserver(() => {
+    if (!card || !onMove) return;
+    const reclamp = () => {
       const m = measure(card);
       const next = clampPosition(pos, m.card, m.container);
       if (!samePosition(next, pos)) onMove(next);
-    });
-    observer.observe(parent);
-    return () => observer.disconnect();
+    };
+    window.addEventListener("resize", reclamp);
+    return () => window.removeEventListener("resize", reclamp);
   }, [pos, onMove]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -137,7 +148,7 @@ export default function CandleInspector({
     // would freeze exactly where the card is.
     <div
       ref={cardRef}
-      className="pointer-events-none absolute z-20 w-[268px] max-w-[calc(100%-1rem)] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
+      className="pointer-events-none fixed z-50 w-[268px] max-w-[calc(100vw-1.5rem)] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
       style={{ left: pos.x, top: pos.y }}
     >
       <div

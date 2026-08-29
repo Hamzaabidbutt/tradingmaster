@@ -186,7 +186,9 @@ export function analyzeMarket(
     timeframe,
     opts.minConfidence ?? ENGINE_DEFAULTS.minSignalConfidence
   );
-  const insights = generateInsights(core, bullishProbability);
+  // Candles are passed so every insight can be anchored to the bar it
+  // describes rather than to the moment the sweep ran.
+  const insights = generateInsights(core, bullishProbability, candles);
 
   const bias =
     bullishProbability >= 55 ? "bullish" : bullishProbability <= 45 ? "bearish" : "neutral";
