@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { FullAnalysis } from "@/engines/types";
+import { collectImbalanceLevels, ImbalanceLevel } from "@/engines/footprint";
 import { GlassCard, timeAgo } from "@/components/ui/primitives";
 
 /**
@@ -146,6 +147,8 @@ export default function FootprintPanel({ analysis }: { analysis: FullAnalysis | 
             })}
           </div>
 
+          <ImbalanceLadder analysis={analysis} />
+
           <div className="border-t border-white/5 px-3 py-1.5 text-[9px] text-slate-600">
             Imbalance threshold {fp.imbalanceThreshold}x · tune per asset & session
           </div>
@@ -161,4 +164,74 @@ function fmt(v: number): string {
   if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`;
   if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
   return `${sign}${abs.toFixed(0)}`;
+}
+
+
+/** Tier colours: the further past the threshold, the hotter. */
+function tierClass(tier: number, side: "buy" | "sell"): string {
+  const bull = side === "buy";
+  if (tier >= 20) return bull ? "bg-bull/30 text-bull" : "bg-bear/30 text-bear";
+  if (tier >= 10) return bull ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear";
+  return bull ? "bg-bull/10 text-bull/80" : "bg-bear/10 text-bear/80";
+}
+
+function LadderColumn({ title, levels, side }: { title: string; levels: ImbalanceLevel[]; side: "buy" | "sell" }) {
+  return (
+    <div className="min-w-0">
+      <div className={`pb-1 text-[9px] uppercase tracking-[0.12em] ${side === "buy" ? "text-bull" : "text-bear"}`}>
+        {title} <span className="font-mono text-slate-600">{levels.length}</span>
+      </div>
+      {levels.length === 0 ? (
+        <p className="text-[10px] text-slate-600">None above threshold.</p>
+      ) : (
+        <div className="space-y-0.5">
+          {levels.map((l) => (
+            <div
+              key={`${l.time}-${l.price}`}
+              className="flex items-center gap-1.5 font-mono text-[10px]"
+              title={`${new Date(l.time * 1000).toLocaleTimeString()} · ratio ${l.ratio}x · ${fmt(l.volume)} on the ${side} side`}
+            >
+              <span className={`rounded px-1 py-[1px] text-[9px] font-bold ${tierClass(l.tier, side)}`}>
+                {l.tier >= 20 ? "20x+" : `${l.tier}x`}
+              </span>
+              <span className="text-slate-300">{l.price.toFixed(l.price >= 1000 ? 1 : 4)}</span>
+              <span className="text-slate-500">{fmt(l.volume)}</span>
+              {l.stacked && (
+                <span className="text-[9px] uppercase tracking-wider text-neon-amber" title="Part of a run of 3+ consecutive imbalances">
+                  stacked
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The imbalanced levels as a list rather than as highlighted cells.
+ *
+ * Reading imbalance off the grid means scanning a matrix for coloured cells
+ * across a dozen bars. The question being asked is simpler than that — *where*
+ * is one side getting no fills, and how badly — and a ranked list answers it
+ * directly. Tiers cap at 20x because past that point a diagonal is just
+ * "the other side printed almost nothing", and sorting by raw ratio would put
+ * near-empty levels above genuinely large ones.
+ */
+function ImbalanceLadder({ analysis }: { analysis: FullAnalysis }) {
+  const { buy, sell } = collectImbalanceLevels(analysis.footprint, { bars: 12, limit: 20 });
+  if (buy.length === 0 && sell.length === 0) return null;
+
+  return (
+    <div className="border-t border-white/5 px-3 py-2">
+      <div className="mb-1.5 text-[9px] uppercase tracking-[0.14em] text-slate-600">
+        Imbalance ladder · last 12 bars
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <LadderColumn title="Buy imbalance" levels={buy} side="buy" />
+        <LadderColumn title="Sell imbalance" levels={sell} side="sell" />
+      </div>
+    </div>
+  );
 }

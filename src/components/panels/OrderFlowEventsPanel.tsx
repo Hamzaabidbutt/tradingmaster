@@ -11,6 +11,14 @@ import { GlassCard, timeAgo } from "@/components/ui/primitives";
 export default function OrderFlowEventsPanel({ analysis }: { analysis: FullAnalysis | null }) {
   const ev = analysis?.orderFlowEvents;
   const delta = analysis?.delta;
+  /**
+   * Timestamp of the newest bar the analysis covers.
+   *
+   * Printed beside the CVD figure so "is this panel live?" is answerable at a
+   * glance. Order-flow events are genuinely intermittent — a quiet stretch and
+   * a stalled panel look identical without a clock somewhere on it.
+   */
+  const lastBar = delta?.series[delta.series.length - 1]?.time ?? null;
 
   return (
     <GlassCard title="Absorption · Exhaustion · Traps" className="h-full">
@@ -21,7 +29,14 @@ export default function OrderFlowEventsPanel({ analysis }: { analysis: FullAnaly
           {/* CVD strip */}
           <div className="border-b border-white/5 px-3 py-2">
             <div className="mb-1 flex items-center justify-between text-[10px]">
-              <span className="uppercase tracking-wider text-slate-500">Cumulative delta</span>
+              <span className="uppercase tracking-wider text-slate-500">
+                Cumulative delta
+                {lastBar != null && (
+                  <span className="ml-1.5 font-mono normal-case tracking-normal text-slate-600">
+                    · to {new Date(lastBar * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
+              </span>
               <span className={`font-mono font-semibold ${delta.cvd >= 0 ? "text-bull" : "text-bear"}`}>
                 {delta.cvd >= 0 ? "+" : ""}{fmt(delta.cvd)} · {delta.cvdTrend}
               </span>
@@ -30,53 +45,21 @@ export default function OrderFlowEventsPanel({ analysis }: { analysis: FullAnaly
           </div>
 
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-            {delta.divergences.slice(-2).reverse().map((d, i) => (
+            {/*
+              One chronological list rather than five fixed-size slices in
+              engine order. Sliced per-kind, a busy absorption run could push
+              a fresh divergence off the panel entirely while older events of
+              another kind stayed pinned — the panel looked static precisely
+              when the tape was busiest.
+            */}
+            {mergeEvents(ev, delta).map((e) => (
               <Card
-                key={`div${i}`}
-                tone={d.kind.includes("bullish") ? "bull" : "bear"}
-                label={d.kind.replace(/_/g, " ")}
-                time={d.time}
-                strength={d.strength}
-                text={d.explanation}
-              />
-            ))}
-            {ev.absorptions.slice(-3).reverse().map((a, i) => (
-              <Card
-                key={`abs${i}`}
-                tone={a.side === "buy" ? "bull" : "bear"}
-                label={`${a.side} absorption${a.atKeyLevel ? " ★ at key level" : " (mid-range)"}`}
-                time={a.time}
-                strength={a.strength}
-                text={a.explanation}
-              />
-            ))}
-            {ev.exhaustions.slice(-2).reverse().map((e, i) => (
-              <Card
-                key={`exh${i}`}
-                tone={e.side === "buy" ? "bear" : "bull"}
-                label={`${e.side === "buy" ? "buyer" : "seller"} exhaustion · ${e.stage}`}
+                key={`${e.kind}-${e.time}-${e.label}`}
+                tone={e.tone}
+                label={e.label}
                 time={e.time}
                 strength={e.strength}
-                text={e.explanation}
-              />
-            ))}
-            {ev.trapped.slice(-3).reverse().map((t, i) => (
-              <Card
-                key={`trap${i}`}
-                tone={t.side === "buyers" ? "bear" : "bull"}
-                label={`trapped ${t.side}`}
-                time={t.time}
-                strength={t.strength}
-                text={t.explanation}
-              />
-            ))}
-            {delta.trapBars.slice(-2).reverse().map((t, i) => (
-              <Card
-                key={`tb${i}`}
-                tone={t.deltaDirection === "bullish" ? "bull" : "bear"}
-                label="trap bar"
-                time={t.time}
-                text={`Candle closed ${t.candleDirection} while delta printed ${t.deltaDirection} (${t.delta >= 0 ? "+" : ""}${fmt(t.delta)}) at ${t.price.toFixed(4)} — the aggressive side was absorbed.`}
+                text={e.text}
               />
             ))}
             {ev.absorptions.length === 0 &&
@@ -168,4 +151,75 @@ function fmt(v: number): string {
   if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
   if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
   return `${sign}${abs.toFixed(0)}`;
+}
+
+
+interface MergedEvent {
+  kind: string;
+  time: number;
+  tone: "bull" | "bear";
+  label: string;
+  strength?: number;
+  text: string;
+}
+
+/** Every order-flow event in one list, newest first. */
+function mergeEvents(
+  ev: NonNullable<FullAnalysis["orderFlowEvents"]>,
+  delta: NonNullable<FullAnalysis["delta"]>
+): MergedEvent[] {
+  const out: MergedEvent[] = [];
+
+  for (const d of delta.divergences) {
+    out.push({
+      kind: "div",
+      time: d.time,
+      tone: d.kind.includes("bullish") ? "bull" : "bear",
+      label: d.kind.replace(/_/g, " "),
+      strength: d.strength,
+      text: d.explanation,
+    });
+  }
+  for (const a of ev.absorptions) {
+    out.push({
+      kind: "abs",
+      time: a.time,
+      tone: a.side === "buy" ? "bull" : "bear",
+      label: `${a.side} absorption${a.atKeyLevel ? " ★ at key level" : " (mid-range)"}`,
+      strength: a.strength,
+      text: a.explanation,
+    });
+  }
+  for (const e of ev.exhaustions) {
+    out.push({
+      kind: "exh",
+      time: e.time,
+      // Buyer exhaustion is bearish for what follows, and vice versa.
+      tone: e.side === "buy" ? "bear" : "bull",
+      label: `${e.side === "buy" ? "buyer" : "seller"} exhaustion · ${e.stage}`,
+      strength: e.strength,
+      text: e.explanation,
+    });
+  }
+  for (const t of ev.trapped) {
+    out.push({
+      kind: "trap",
+      time: t.time,
+      tone: t.side === "buyers" ? "bear" : "bull",
+      label: `trapped ${t.side}`,
+      strength: t.strength,
+      text: t.explanation,
+    });
+  }
+  for (const t of delta.trapBars) {
+    out.push({
+      kind: "tb",
+      time: t.time,
+      tone: t.deltaDirection === "bullish" ? "bull" : "bear",
+      label: "trap bar",
+      text: `Candle closed ${t.candleDirection} while delta printed ${t.deltaDirection} (${t.delta >= 0 ? "+" : ""}${fmt(t.delta)}) at ${t.price.toFixed(4)} — the aggressive side was absorbed.`,
+    });
+  }
+
+  return out.sort((a, b) => b.time - a.time).slice(0, 24);
 }

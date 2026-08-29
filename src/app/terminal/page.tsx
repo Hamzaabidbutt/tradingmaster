@@ -23,6 +23,8 @@ import { useAnalysis } from "@/hooks/useAnalysis";
 import { useLiveMarket } from "@/hooks/useLiveMarket";
 import { useOrderWalls } from "@/hooks/useOrderWalls";
 import OrderWallStrip from "@/components/chart/OrderWallStrip";
+import EventTape from "@/components/chart/EventTape";
+import WhaleOrdersPanel from "@/components/panels/WhaleOrdersPanel";
 import { useCandleCountdown } from "@/hooks/useCandleCountdown";
 import { useSymbols } from "@/hooks/useSymbols";
 import { useMarketStore } from "@/stores/marketStore";
@@ -62,8 +64,16 @@ export default function TerminalPage() {
 const SYMBOL_RE = /^[A-Z0-9]{4,20}$/;
 
 function Terminal() {
-  const { symbol, timeframe, overlays, pulseWindowMinutes, setSymbol, setTimeframe } =
-    useMarketStore();
+  const {
+    symbol,
+    timeframe,
+    overlays,
+    pulseWindowMinutes,
+    setSymbol,
+    setTimeframe,
+    inspectorPos,
+    setInspectorPos,
+  } = useMarketStore();
   const searchParams = useSearchParams();
 
   /**
@@ -165,6 +175,8 @@ function Terminal() {
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
         {/* Chart cell */}
         <div className="glass flex h-[620px] flex-col p-3">
+          {/* Above the coin name: what the tape has done recently, with times. */}
+          <EventTape analysis={analysis} />
           <MarketSelector connected={connected} price={price} countdown={formatted} />
           {dataSource === "browser" && (
             <div className="mb-2 rounded-lg border border-neon-amber/30 bg-neon-amber/5 px-3 py-1.5 text-[10px] leading-relaxed text-neon-amber">
@@ -196,6 +208,8 @@ function Terminal() {
               countdown={formatted}
               livePrice={price}
               walls={walls}
+              inspectorPos={inspectorPos}
+              onInspectorMove={setInspectorPos}
             />
           </div>
         </div>
@@ -239,11 +253,14 @@ function Terminal() {
         <div className="h-[600px]"><RangeTradingPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
       </div>
 
-      {/* Core intelligence row */}
+      {/* Core intelligence row. Order flow used to lead here; it now follows
+          the footprint below, since the footprint is the evidence and the
+          order-flow read is the conclusion drawn from it — reading them in
+          that order costs nothing and saves scrolling back up. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-2 2xl:grid-cols-3">
-        <div className="h-[560px]"><OrderFlowPanel analysis={analysis} /></div>
         <div className="h-[560px]"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
         <div className="h-[560px]"><StructurePanel analysis={analysis} /></div>
+        <div className="h-[560px]"><WhaleOrdersPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
       </div>
 
       {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
@@ -251,6 +268,11 @@ function Terminal() {
         <div className="hidden h-[600px] xl:block"><FootprintPanel analysis={analysis} /></div>
         <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
         <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>
+      </div>
+
+      {/* Order flow, directly beneath the footprint it is derived from. */}
+      <div className="p-3 pt-0">
+        <div className="h-[560px]"><OrderFlowPanel analysis={analysis} /></div>
       </div>
 
       {/* Forced-flow map — sits directly below the footprint row on desktop. */}

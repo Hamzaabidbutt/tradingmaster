@@ -16,10 +16,12 @@ import {
   createChart,
 } from "lightweight-charts";
 import { Candle, FullAnalysis, OrderWallResult } from "@/engines/types";
-import { OverlayToggles } from "@/stores/marketStore";
+import { InspectorPosition, OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
+import { splitCvdByDirection } from "./cvdSeries";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
+import { buildCandleStory } from "@/engines/candleStory";
 import CandleInspector from "./CandleInspector";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 
@@ -36,10 +38,16 @@ interface Props {
   livePrice?: number | null;
   /** resting order-book walls; null when both wall overlays are off */
   walls?: OrderWallResult | null;
+  /** where the inspector has been dragged to; null = its default corner */
+  inspectorPos?: InspectorPosition | null;
+  onInspectorMove?: (pos: InspectorPosition | null) => void;
 }
 
 const BULL = "#00e5a0";
 const BEAR = "#ff4d6d";
+/** Cumulative delta: blue while it rises, white while it falls. */
+const CVD_UP = "#3b82f6";
+const CVD_DOWN = "#e2e8f0";
 
 /** Height (px) of each numeric data row rendered under the price panel. */
 const ROW_H = 22;
@@ -64,6 +72,8 @@ export default function TradingChart({
   countdown,
   livePrice,
   walls,
+  inspectorPos,
+  onInspectorMove,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -72,7 +82,12 @@ export default function TradingChart({
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const maSeriesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
   const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  const cvdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /**
+   * Cumulative delta is two overlaid series, not one: a line series carries a
+   * single colour, so rising and falling stretches need one each.
+   */
+  const cvdUpSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const cvdDownSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   /**
@@ -199,7 +214,8 @@ export default function TradingChart({
       volumeSeriesRef.current = null;
       maSeriesRef.current.clear();
       vwapSeriesRef.current = null;
-      cvdSeriesRef.current = null;
+      cvdUpSeriesRef.current = null;
+      cvdDownSeriesRef.current = null;
       liqCumSeriesRef.current = null;
       priceLinesRef.current = [];
       loadedKeyRef.current = null;
@@ -312,6 +328,18 @@ export default function TradingChart({
     if (!candle) return null;
     return computeCandleStats(candle, candles, analysis);
   }, [hoveredTime, candles, analysis]);
+
+  /**
+   * The hovered bar's narrative.
+   *
+   * Kept out of `inspectorStats` so the numbers still render if story
+   * assembly ever throws on an unusual analysis shape — the card's primary
+   * job is the figures, and it should not go blank over a sentence.
+   */
+  const inspectorStory = useMemo(
+    () => (inspectorStats ? buildCandleStory(inspectorStats, candles, analysis) : undefined),
+    [inspectorStats, candles, analysis]
+  );
 
   // --- Data feed (incremental: a refetch must never reset the view) ---
   useEffect(() => {
@@ -504,31 +532,47 @@ export default function TradingChart({
     );
   }, [ready, analysis, overlays.vwap]);
 
-  // --- CVD (own scale, drawn as an overlay line) ---
+  // --- CVD (own scale, blue where it rises and white where it falls) ---
   useEffect(() => {
     const chart = chartRef.current;
     if (!ready || !chart || disposedRef.current) return;
     if (!overlays.cvd || !analysis) {
-      if (cvdSeriesRef.current) {
-        try { chart.removeSeries(cvdSeriesRef.current); } catch { /* disposed */ }
-        cvdSeriesRef.current = null;
+      for (const ref of [cvdUpSeriesRef, cvdDownSeriesRef]) {
+        if (ref.current) {
+          try { chart.removeSeries(ref.current); } catch { /* disposed */ }
+          ref.current = null;
+        }
       }
       return;
     }
-    if (!cvdSeriesRef.current) {
-      cvdSeriesRef.current = chart.addLineSeries({
-        color: "#38bdf8",
+    const makeSeries = (color: string) =>
+      chart.addLineSeries({
+        color,
         lineWidth: 2,
         priceScaleId: "cvd",
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
+    if (!cvdUpSeriesRef.current) {
+      cvdUpSeriesRef.current = makeSeries(CVD_UP);
       chart.priceScale("cvd").applyOptions({ scaleMargins: { top: 0.05, bottom: 0.75 } });
     }
-    cvdSeriesRef.current.setData(
-      analysis.delta.series.map((d) => ({ time: d.time as UTCTimestamp, value: d.cvd }))
-    );
+    if (!cvdDownSeriesRef.current) cvdDownSeriesRef.current = makeSeries(CVD_DOWN);
+
+    const { up, down } = splitCvdByDirection(analysis.delta.series);
+    const toSeries = (points: ReturnType<typeof splitCvdByDirection>["up"]) =>
+      points.map((p) =>
+        "value" in p
+          ? { time: p.time as UTCTimestamp, value: p.value }
+          : { time: p.time as UTCTimestamp }
+      );
+    try {
+      cvdUpSeriesRef.current.setData(toSeries(up));
+      cvdDownSeriesRef.current.setData(toSeries(down));
+    } catch {
+      /* disposed between the guard and the call */
+    }
   }, [ready, analysis, overlays.cvd]);
 
   // --- Aggregate liquidation delta, cumulative (forced-flow balance) ---
@@ -1135,7 +1179,10 @@ export default function TradingChart({
         <CandleInspector
           compact={coarsePointer}
           stats={inspectorStats}
+          story={inspectorStory}
           pricePrecision={pricePrecision}
+          position={inspectorPos}
+          onMove={onInspectorMove}
         />
       )}
 
