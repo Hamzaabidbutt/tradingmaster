@@ -263,3 +263,88 @@ function buildOne(
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
+
+/* ------------------------------------------------------------------ *
+ * Imbalance ladder
+ * ------------------------------------------------------------------ */
+
+/** One price level where the diagonal ratio cleared the threshold. */
+export interface ImbalanceLevel {
+  time: number;
+  price: number;
+  side: "buy" | "sell";
+  /** ask/bid (buy) or bid/ask (sell) across the diagonal */
+  ratio: number;
+  /** the ratio rounded down to a displayed tier: 3, 5, 10, 15 or 20 */
+  tier: number;
+  /** volume on the aggressing side at this level */
+  volume: number;
+  /** part of a run of 3+ consecutive imbalances in the same direction */
+  stacked: boolean;
+}
+
+/**
+ * Tiers the ladder is bucketed into, ascending.
+ *
+ * 20 is the top bucket rather than the top ratio: a diagonal where the other
+ * side printed almost nothing produces ratios in the hundreds, and a list
+ * sorted by raw ratio would then be a list of near-empty levels. Everything
+ * at 20× or beyond is equally "one side got no opportunity", so they share a
+ * bucket and are ordered by volume within it, which is what distinguishes a
+ * meaningful print from a rounding artefact.
+ */
+export const IMBALANCE_TIERS = [3, 5, 10, 15, 20] as const;
+
+function tierOf(ratio: number): number {
+  let tier: number = IMBALANCE_TIERS[0];
+  for (const t of IMBALANCE_TIERS) if (ratio >= t) tier = t;
+  return tier;
+}
+
+/**
+ * Every imbalanced level in the footprint, strongest first.
+ *
+ * The grid already colours these, but reading them off it means scanning a
+ * matrix for highlighted cells across dozens of bars. As a list they answer
+ * the question directly — *where* is one side being given no opportunity to
+ * fill, and how badly — which is the whole point of watching imbalance.
+ */
+export function collectImbalanceLevels(
+  footprint: FootprintResult,
+  opts: { bars?: number; limit?: number } = {}
+): { buy: ImbalanceLevel[]; sell: ImbalanceLevel[] } {
+  const bars = opts.bars ?? 12;
+  const limit = opts.limit ?? 20;
+  const out: ImbalanceLevel[] = [];
+
+  for (const candle of footprint.candles.slice(-bars)) {
+    for (const cell of candle.cells) {
+      if (!cell.imbalance || cell.imbalanceRatio <= 0) continue;
+      const stacked = candle.stackedImbalances.some(
+        (s) =>
+          s.direction === cell.imbalance &&
+          cell.price >= Math.min(s.fromPrice, s.toPrice) &&
+          cell.price <= Math.max(s.fromPrice, s.toPrice)
+      );
+      out.push({
+        time: candle.time,
+        price: cell.price,
+        side: cell.imbalance,
+        ratio: Number(cell.imbalanceRatio.toFixed(2)),
+        tier: tierOf(cell.imbalanceRatio),
+        volume: cell.imbalance === "buy" ? cell.askVolume : cell.bidVolume,
+        stacked,
+      });
+    }
+  }
+
+  // Tier first, then volume — see the note on IMBALANCE_TIERS for why raw
+  // ratio is the wrong sort key at the top end.
+  const rank = (a: ImbalanceLevel, b: ImbalanceLevel) =>
+    b.tier - a.tier || b.volume - a.volume || b.time - a.time;
+
+  return {
+    buy: out.filter((l) => l.side === "buy").sort(rank).slice(0, limit),
+    sell: out.filter((l) => l.side === "sell").sort(rank).slice(0, limit),
+  };
+}
