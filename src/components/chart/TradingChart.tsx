@@ -22,8 +22,8 @@ import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
 import { splitCvdByDirection } from "./cvdSeries";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
 import { buildCandleStory } from "@/engines/candleStory";
+import { findStrongCandles } from "@/engines/strongCandles";
 import CandleInspector from "./CandleInspector";
-import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 
 interface Props {
   candles: Candle[];
@@ -48,6 +48,13 @@ const BEAR = "#ff4d6d";
 /** Cumulative delta: blue while it rises, white while it falls. */
 const CVD_UP = "#3b82f6";
 const CVD_DOWN = "#e2e8f0";
+/**
+ * Bars carrying outsized volume with one-sided delta and/or forced flow.
+ * Yellow rather than a brighter green/red, so "this bar mattered" reads as a
+ * different statement from "this bar went up".
+ */
+const STRONG = "#facc15";
+const EXTREME = "#fde047";
 
 /** Height (px) of each numeric data row rendered under the price panel. */
 const ROW_H = 22;
@@ -124,9 +131,6 @@ export default function TradingChart({
   /** Mirrors hoveredTime without re-rendering, so the crosshair handler can
    *  compare cheaply and only call setState when the bar actually changes. */
   const hoveredTimeRef = useRef<number | null>(null);
-  /** Touchscreen: the inspector renders as a strip, not a card. */
-  const coarsePointer = useCoarsePointer();
-
   /** How many numeric rows are switched on (reserves space at the bottom). */
   const numericRows =
     (overlays.volumeNumbers ? 1 : 0) +
@@ -314,17 +318,17 @@ export default function TradingChart({
   }, [ready]);
 
   /**
-   * Stats for the candle under the cursor, or null when there is none.
+   * Stats for the candle under the cursor, falling back to the newest bar.
    *
-   * Deliberately blank rather than falling back to the newest bar. A card that
-   * is always on screen is always covering something, and the cure for that —
-   * letting the user drag it out of the way — is machinery in service of a
-   * problem that only exists because the card outstays its welcome. Showing it
-   * only while a candle is actually being pointed at removes both.
+   * The panel stays on screen and is dragged out of the way instead of
+   * disappearing, so it needs something to show when nothing is hovered —
+   * and a blank card while the market moves is the one state that is never
+   * useful.
    */
   const inspectorStats: CandleStats | null = useMemo(() => {
-    if (candles.length === 0 || hoveredTime == null) return null;
-    const candle = candleAtTime(candles, hoveredTime);
+    if (candles.length === 0) return null;
+    const candle =
+      hoveredTime == null ? candles[candles.length - 1] : candleAtTime(candles, hoveredTime);
     if (!candle) return null;
     return computeCandleStats(candle, candles, analysis);
   }, [hoveredTime, candles, analysis]);
@@ -346,13 +350,24 @@ export default function TradingChart({
     if (!ready || !candleSeriesRef.current || candles.length === 0) return;
     const isNewDataset = loadedKeyRef.current !== datasetKey;
 
-    const toBar = (c: Candle): CandlestickData => ({
-      time: c.time as UTCTimestamp,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    });
+    // Recomputed with the feed rather than in a memo: it depends on the same
+    // candles, and a stale strength map would colour the wrong bars.
+    const strong = findStrongCandles(candles, analysis?.liquidationDelta.series ?? []);
+
+    const toBar = (c: Candle): CandlestickData => {
+      const mark = strong.get(c.time);
+      const bar: CandlestickData = {
+        time: c.time as UTCTimestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      };
+      if (!mark) return bar;
+      const colour = mark.strength === "extreme" ? EXTREME : STRONG;
+      // Wick included: a strong bar with a two-tone wick reads as two bars.
+      return { ...bar, color: colour, wickColor: colour, borderColor: colour };
+    };
     const toVol = (c: Candle): HistogramData => {
       const buy = c.takerBuyVolume ?? c.volume / 2;
       return {
@@ -395,7 +410,10 @@ export default function TradingChart({
         /* chart disposed mid-update */
       }
     }
-  }, [ready, candles, overlays.volume, datasetKey]);
+    // `analysis.liquidationDelta` is a dependency because the strength map is
+    // built from it: a bar can become "extreme" when forced flow arrives for
+    // it, with the candles themselves unchanged.
+  }, [ready, candles, overlays.volume, datasetKey, analysis?.liquidationDelta]);
 
   // Volume histogram must be rebuilt when it is toggled back on.
   useEffect(() => {
@@ -1177,7 +1195,7 @@ export default function TradingChart({
 
       {overlays.candleInspector && inspectorStats && (
         <CandleInspector
-          compact={coarsePointer}
+          live={hoveredTime == null}
           stats={inspectorStats}
           story={inspectorStory}
           pricePrecision={pricePrecision}
