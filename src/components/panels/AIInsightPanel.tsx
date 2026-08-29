@@ -5,9 +5,18 @@ import { FullAnalysis, Insight } from "@/engines/types";
 import { BiasBadge, GlassCard, ProbabilityBar, timeAgo } from "@/components/ui/primitives";
 
 /**
- * The continuously updating AI market analyst. New insights stream in with
- * each analysis refresh; each entry carries the evidence behind the call —
- * behaving like an institutional desk analyst, never a bare BUY/SELL label.
+ * The continuously updating AI market analyst.
+ *
+ * Every entry answers two separate questions, and the panel keeps them
+ * separate. **Candle** is the bar the observation is about — that is the number
+ * you match against the chart, and on a 4h interval it can be hours away from
+ * the moment the reading was produced. **Read** is when the system said it,
+ * which only tells you how stale the line is. Collapsing the two, as a single
+ * timestamp does, makes a four-bar-old absorption event look like it happened
+ * just now.
+ *
+ * The feed arrives pre-ranked by severity and conviction, so it is rendered in
+ * the order given rather than re-sorted here.
  */
 export default function AIInsightPanel({ analysis }: { analysis: FullAnalysis | null }) {
   const [feed, setFeed] = useState<(Insight & { id: string })[]>([]);
@@ -17,7 +26,10 @@ export default function AIInsightPanel({ analysis }: { analysis: FullAnalysis | 
     if (!analysis) return;
     const fresh: (Insight & { id: string })[] = [];
     for (const ins of analysis.insights) {
-      const key = `${ins.category}:${ins.headline}`;
+      // Keyed by the bar as well as the headline: the same observation on a
+      // new candle is a new event, and suppressing it would freeze the feed
+      // while the market moved.
+      const key = `${ins.category}:${ins.headline}:${ins.barTime}`;
       if (seen.current.has(key)) continue;
       seen.current.add(key);
       fresh.push({ ...ins, id: `${key}:${ins.time}` });
@@ -27,7 +39,7 @@ export default function AIInsightPanel({ analysis }: { analysis: FullAnalysis | 
     }
     // Allow headlines to reappear after 3 minutes so evolving conditions re-surface.
     const t = setTimeout(() => {
-      for (const f of fresh) seen.current.delete(`${f.category}:${f.headline}`);
+      for (const f of fresh) seen.current.delete(`${f.category}:${f.headline}:${f.barTime}`);
     }, 180_000);
     return () => clearTimeout(t);
   }, [analysis]);
@@ -80,17 +92,34 @@ export default function AIInsightPanel({ analysis }: { analysis: FullAnalysis | 
                     {ins.headline}
                   </h4>
                 </div>
-                {/* Clock time first: "14:32:07" is what you match against the
-                    chart; "3m ago" only says how stale the line is. */}
                 <time
-                  dateTime={new Date(ins.time * 1000).toISOString()}
+                  dateTime={new Date(ins.barTime * 1000).toISOString()}
                   className="shrink-0 text-right font-mono text-[9px] leading-tight text-slate-500"
+                  title={`Observed on the ${ins.barTimeframe} candle opening ${localDateTime(ins.barTime)} · read produced ${clockTime(ins.time)}`}
                 >
-                  <span className="block text-neon-cyan/70">{clockTime(ins.time)}</span>
-                  <span className="block text-slate-600">{timeAgo(ins.time)}</span>
+                  <span className="block text-neon-cyan/80">🕒 {clockTime(ins.barTime)}</span>
+                  <span className="block text-slate-600">
+                    {ins.barsAgo === 0 ? "live bar" : `${ins.barsAgo} ${ins.barTimeframe} bar${ins.barsAgo === 1 ? "" : "s"} ago`}
+                  </span>
                 </time>
               </div>
               <p className="pl-3.5 text-[11px] leading-relaxed text-slate-400">{ins.detail}</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 pl-3.5 font-mono text-[9px] text-slate-600">
+                <span className="uppercase tracking-wider">{ins.category.replace(/_/g, " ")}</span>
+                <span
+                  className={
+                    ins.confidence >= 75
+                      ? "text-neon-cyan"
+                      : ins.confidence >= 60
+                        ? "text-slate-400"
+                        : "text-slate-600"
+                  }
+                  title="Conviction that this observation is real — not the odds a trade works."
+                >
+                  conviction {ins.confidence}
+                </span>
+                <span className="ml-auto">read {timeAgo(ins.time)}</span>
+              </div>
             </article>
           ))}
         </div>
@@ -107,4 +136,9 @@ function clockTime(unixSec: number): string {
     second: "2-digit",
     hour12: false,
   });
+}
+
+function localDateTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }

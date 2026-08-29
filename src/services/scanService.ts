@@ -12,9 +12,13 @@ import { detectAccumulation } from "@/engines/accumulation";
 import { detectZoneReversal } from "@/engines/zoneReversal";
 import { detectLiquidationReversal } from "@/engines/liquidationReversal";
 import { detectCascadeRisk } from "@/engines/cascadeRisk";
+import { detectBullishEngulfing } from "@/engines/engulfing";
+import { detectInstitutional } from "@/engines/institutional";
 import {
   AccumulationSetup,
   CascadeRiskSetup,
+  EngulfingSetup,
+  InstitutionalSetup,
   ConfluenceSetup,
   LiquidationReversalSetup,
   ZoneReversalSetup,
@@ -502,6 +506,160 @@ export async function scanCascadeRisk(opts: {
     timeframe: opts.timeframe,
     longFlush: qualified.filter((e) => e.setup.side === "long").sort(byScore),
     shortSqueeze: qualified.filter((e) => e.setup.side === "short").sort(byScore),
+    forming: entries
+      .filter((e) => !e.setup.qualified && e.setup.grade === "forming")
+      .sort(byScore)
+      .slice(0, 12),
+    scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Bullish engulfing sweep
+ * ------------------------------------------------------------------ */
+
+export interface EngulfingEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: EngulfingSetup;
+}
+
+export interface EngulfingScan {
+  timeframe: string;
+  /** engulfing bars that also cleared the confirmation checks */
+  confirmed: EngulfingEntry[];
+  /** the pattern printed, but flow or location did not back it */
+  unconfirmed: EngulfingEntry[];
+  scanned: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for bullish engulfing bars on the last closed candle.
+ *
+ * Defaults to 4h, which is the timeframe the pattern is worth scanning on: on
+ * 5m every coin prints one every hour and the list is noise.
+ */
+export async function scanEngulfing(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<EngulfingScan> {
+  const ranked = (await rankUniverse()).slice(0, opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectBullishEngulfing(r.symbol, opts.timeframe, candles),
+    } satisfies EngulfingEntry;
+  });
+
+  const entries: EngulfingEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: EngulfingEntry, b: EngulfingEntry) => b.setup.score - a.setup.score;
+  const engulfed = entries.filter((e) => e.setup.engulfed);
+
+  return {
+    timeframe: opts.timeframe,
+    confirmed: engulfed.filter((e) => e.setup.qualified).sort(byScore),
+    // Kept rather than dropped: "the pattern is there and the flow is not" is
+    // the more common case, and seeing it is how the filter earns its keep.
+    unconfirmed: engulfed.filter((e) => !e.setup.qualified).sort(byScore).slice(0, 15),
+    scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Institutional footprint sweep
+ * ------------------------------------------------------------------ */
+
+export interface InstitutionalEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: InstitutionalSetup;
+}
+
+export interface InstitutionalScan {
+  timeframe: string;
+  /** several kinds of evidence converging on one area */
+  footprints: InstitutionalEntry[];
+  /** evidence present but scattered, or too few kinds */
+  forming: InstitutionalEntry[];
+  scanned: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for coins showing an institutional footprint.
+ *
+ * The most expensive sweep in the app: eleven engines plus an open-interest
+ * request per symbol. Depth defaults lower than the others for that reason,
+ * and the timeframe defaults to 4h because size is worked over hours, not
+ * minutes — the same evidence on a 5m chart is mostly noise.
+ */
+export async function scanInstitutional(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<InstitutionalScan> {
+  const ranked = (await rankUniverse()).slice(0, opts.depth ?? 50);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const [candles, oi] = await Promise.all([
+      fetchKlines(r.symbol, opts.timeframe, SCAN_BARS),
+      fetchOpenInterestHist(r.symbol, "1h", 48).catch(() => []),
+    ]);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectInstitutional(
+        r.symbol,
+        opts.timeframe,
+        candles,
+        oi.length > 0 ? oi.map((p) => p.openInterest) : null
+      ),
+    } satisfies InstitutionalEntry;
+  });
+
+  const entries: InstitutionalEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: InstitutionalEntry, b: InstitutionalEntry) => b.setup.score - a.setup.score;
+
+  return {
+    timeframe: opts.timeframe,
+    footprints: entries.filter((e) => e.setup.qualified).sort(byScore),
     forming: entries
       .filter((e) => !e.setup.qualified && e.setup.grade === "forming")
       .sort(byScore)

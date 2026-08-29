@@ -1035,7 +1035,23 @@ export interface FullAnalysis {
 }
 
 export interface Insight {
+  /** when the system produced the line — how stale the *reading* is */
   time: number;
+  /**
+   * Open time of the candle the observation is drawn from.
+   *
+   * Distinct from `time` on purpose. "Buyers absorbed sellers" is a statement
+   * about a specific bar; the scan that noticed it may have run minutes later,
+   * and on a 4h chart that gap can be hours. Without the bar's own clock time
+   * a reader cannot line the line up against the chart it describes.
+   */
+  barTime: number;
+  /** closed bars between that candle and the forming one; 0 = the live bar */
+  barsAgo: number;
+  /** the interval `barTime` belongs to, so "14:30" is unambiguous */
+  barTimeframe: string;
+  /** 0-100 conviction in this single observation. Not a probability of profit. */
+  confidence: number;
   severity: "info" | "warning" | "critical";
   category:
     | "order_flow"
@@ -1350,6 +1366,96 @@ export interface CascadeRiskSetup {
   score: number;
   qualified: boolean;
   grade: "prime" | "strong" | "forming" | "none";
+  headline: string;
+  explanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Bullish engulfing scanner
+ * ------------------------------------------------------------------ */
+
+export interface EngulfingSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  /** did the last closed bar engulf the one before it */
+  engulfed: boolean;
+  /** open time of the engulfing bar */
+  time: number;
+  barsAgo: number;
+  /** engulfing body as a multiple of the body it covered */
+  bodyRatio: number;
+  /** covered the previous bar's full range, wicks included */
+  fullRange: boolean;
+  deltaConfirms: boolean;
+  delta: number;
+  atSupport: boolean;
+  trend: Bias;
+  score: number;
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  entry: number | null;
+  invalidation: number | null;
+  target: number | null;
+  headline: string;
+  explanation: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Institutional footprint — where size was worked, and what it implies
+ * ------------------------------------------------------------------ */
+
+/** One piece of evidence that size was being worked at a level. */
+export interface InstitutionalEvidence {
+  key: string;
+  label: string;
+  /** did this evidence appear at all */
+  found: boolean;
+  /** contribution toward the 0-100 conviction score */
+  score: number;
+  weight: number;
+  /** the price this evidence points at, when it has one */
+  price: number | null;
+  detail: string;
+}
+
+export interface InstitutionalZone {
+  low: number;
+  high: number;
+  /** midpoint, quoted as "the area" */
+  mid: number;
+  /** signed % from current price; negative = below */
+  distancePct: number;
+  /** how many independent kinds of evidence land inside this band */
+  confluence: number;
+  sources: string[];
+}
+
+export interface InstitutionalSetup {
+  symbol: string;
+  timeframe: string;
+  price: number;
+  /** the side size appears to have been working */
+  side: "accumulation" | "distribution" | "none";
+  /** the strongest area, when one is found */
+  zone: InstitutionalZone | null;
+  /** every area with at least two kinds of evidence, nearest first */
+  zones: InstitutionalZone[];
+  evidence: InstitutionalEvidence[];
+  /** 0-100 conviction that size was worked here. Not a probability of profit. */
+  score: number;
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  /** open interest change over the window, when available */
+  openInterestChangePct: number | null;
+  /**
+   * Where the read points, expressed as levels rather than a forecast:
+   * the level that would confirm it and the level that would refute it.
+   */
+  confirmAbove: number | null;
+  invalidateBelow: number | null;
+  /** the next mapped level in the implied direction */
+  objective: number | null;
   headline: string;
   explanation: string[];
 }
