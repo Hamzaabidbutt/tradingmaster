@@ -30,6 +30,8 @@ const TONE_CLASS: Record<StoryLine["tone"], string> = {
 
 const SECTION_LABEL: Record<StoryLine["section"], string> = {
   aggression: "Who was aggressive",
+  wick: "The wicks",
+  stops: "Stop hunt",
   absorption: "Absorption & traps",
   divergence: "Divergence",
   forced: "Forced flow",
@@ -45,32 +47,28 @@ const SECTION_LABEL: Record<StoryLine["section"], string> = {
  * not cover render as "—" instead of zero, because zero forced flow and *no
  * data about* forced flow mean very different things.
  *
- * Shown only while a candle is actually under the pointer. An always-visible
- * panel is always covering something, and every cure for that — dragging it,
- * shrinking it, moving it to a corner — is work in service of a problem that
- * disappears if the panel simply leaves when it has nothing to describe.
+ * The panel stays on screen rather than appearing only on hover, and is moved
+ * out of the way by dragging its header instead. Those two decisions belong
+ * together: a panel that comes and goes needs no drag handle, and a permanent
+ * one is unusable without it. It falls back to the newest bar when nothing is
+ * hovered, so it is never blank while the market moves.
  *
- * Two layouts, chosen by the pointer rather than by the viewport width, since
- * what differs is the interaction and not the screen size:
- *
- *  * **Card** (mouse) — the full breakdown in the top-left. It appears while
- *    the cursor is over a bar and goes when the cursor does.
- *  * **Strip** (touch) — one wrapping line across the top, shown while a
- *    finger is on a candle. A phone has no hover state to lean on, so a card
- *    of this size would have to be dismissed rather than simply left.
+ * The same card is used on touch. Pointer events cover mouse, pen and finger
+ * alike, so the handle drags identically — `touch-none` is what stops the
+ * browser claiming the gesture for a scroll first.
  */
 export default function CandleInspector({
   stats,
   pricePrecision,
-  compact,
   story,
+  live,
   position,
   onMove,
 }: {
   stats: CandleStats;
   pricePrecision: number;
-  /** render the touch-friendly strip instead of the full card */
-  compact?: boolean;
+  /** true when nothing is hovered and this is the newest bar */
+  live?: boolean;
   /** the bar's narrative, from `buildCandleStory` */
   story?: StoryLine[];
   /** where the card sits, in px from the chart's top-left */
@@ -133,58 +131,13 @@ export default function CandleInspector({
     }
   }, []);
 
-  if (compact) {
-    return (
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 border-b border-white/5 bg-base-900/85 px-2 py-1 font-mono text-[9px] backdrop-blur-md">
-        <span className={`font-bold ${stats.bullish ? "text-bull" : "text-bear"}`}>
-          {stats.bullish ? "▲" : "▼"} {stats.changePct >= 0 ? "+" : ""}
-          {stats.changePct.toFixed(2)}%
-        </span>
-        <span className="text-slate-500">
-          {when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-        </span>
-
-        <Pair label="O" value={p(stats.open)} />
-        <Pair label="H" value={p(stats.high)} />
-        <Pair label="L" value={p(stats.low)} />
-        <Pair label="C" value={p(stats.close)} />
-        <Pair
-          label="V"
-          value={fmt(stats.volume)}
-          sub={stats.volumeMultiple != null ? `${stats.volumeMultiple}×` : undefined}
-          tone={stats.volumeMultiple != null && stats.volumeMultiple > 1.5 ? "amber" : "plain"}
-        />
-        <Pair
-          label="Δ"
-          value={`${stats.deltaVolume >= 0 ? "+" : ""}${fmt(stats.deltaVolume)}`}
-          sub={`${stats.buyPct.toFixed(0)}%`}
-          tone={stats.deltaVolume >= 0 ? "bull" : "bear"}
-        />
-        {stats.liquidationDelta != null && (
-          <Pair
-            label="LIQΔ"
-            value={`${stats.liquidationDelta >= 0 ? "+" : ""}${fmt(stats.liquidationDelta)}`}
-            tone={stats.liquidationDelta >= 0 ? "bull" : "bear"}
-          />
-        )}
-        {stats.cvd != null && (
-          <Pair
-            label="CVD"
-            value={`${stats.cvd >= 0 ? "+" : ""}${fmt(stats.cvd)}`}
-            tone={stats.cvd >= 0 ? "bull" : "bear"}
-          />
-        )}
-      </div>
-    );
-  }
-
   return (
     // pointer-events-none throughout: the card sits over the candles, and a
     // solid block would swallow the crosshair that drives it — the readings
     // would freeze exactly where the card is.
     <div
       ref={cardRef}
-      className="pointer-events-none absolute z-20 w-[268px] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
+      className="pointer-events-none absolute z-20 w-[268px] max-w-[calc(100%-1rem)] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
       style={{ left: pos.x, top: pos.y }}
     >
       <div
@@ -209,11 +162,21 @@ export default function CandleInspector({
             {when.toLocaleDateString()} {when.toLocaleTimeString()}
           </div>
         </div>
-        {onMove && (
-          <span aria-hidden className="text-[11px] leading-none text-slate-600">
-            ⠿
-          </span>
-        )}
+        <span className="flex items-center gap-1.5">
+          {live && (
+            <span
+              className="rounded bg-neon-cyan/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider text-neon-cyan"
+              title="Nothing hovered — showing the newest bar"
+            >
+              live
+            </span>
+          )}
+          {onMove && (
+            <span aria-hidden className="text-[11px] leading-none text-slate-600">
+              ⠿
+            </span>
+          )}
+        </span>
       </div>
 
       <div className="grid grid-cols-2 gap-1">
