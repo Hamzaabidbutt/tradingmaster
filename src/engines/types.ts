@@ -1431,6 +1431,76 @@ export interface InstitutionalZone {
   sources: string[];
 }
 
+/**
+ * The balance area the market is currently trading inside, when it is in one.
+ *
+ * Null in a trend, deliberately. A range gives the checklist objective
+ * boundaries — the high and low are where the reactions actually happened — but
+ * only where one exists; picking a lookback high and low out of a trending
+ * market produces two arbitrary numbers that look like levels.
+ */
+export interface InstitutionalRange {
+  high: number;
+  low: number;
+  mid: number;
+  /** where price sits inside it: 0 at the low, 1 at the high */
+  position: number;
+  /** bars the range covers */
+  bars: number;
+  /** closes that came within a fifth of the range of each boundary */
+  touchesLow: number;
+  touchesHigh: number;
+}
+
+/**
+ * A comparable area found earlier in the same series, with what price did
+ * after price returned to it. Measured, not modelled.
+ */
+export interface InstitutionalAnalogue {
+  /** bar time the area finished forming */
+  time: number;
+  low: number;
+  high: number;
+  confluence: number;
+  sources: string[];
+  /** bar time price first traded back into it, null if it never did */
+  tapTime: number | null;
+  outcome: "held" | "broke" | "unresolved";
+  /** furthest move in the area's favour after the tap, % */
+  favourablePct: number;
+  /** furthest move against it, % */
+  adversePct: number;
+}
+
+export interface InstitutionalHistory {
+  /** comparable areas with a resolved outcome */
+  samples: number;
+  held: number;
+  broke: number;
+  /**
+   * null below the minimum sample count. A hit rate computed from two cases
+   * is not a hit rate, and rendering one invites it to be read as an edge.
+   */
+  holdRatePct: number | null;
+  medianFavourablePct: number | null;
+  medianAdversePct: number | null;
+  /** the most recent few, for inspection */
+  analogues: InstitutionalAnalogue[];
+  note: string;
+}
+
+/** One side's complete read. Both sides are always evaluated. */
+export interface InstitutionalSideRead {
+  side: "accumulation" | "distribution";
+  zone: InstitutionalZone | null;
+  zones: InstitutionalZone[];
+  evidence: InstitutionalEvidence[];
+  /** how many distinct checklist items were found */
+  kinds: number;
+  score: number;
+  qualified: boolean;
+}
+
 export interface InstitutionalSetup {
   symbol: string;
   timeframe: string;
@@ -1446,14 +1516,24 @@ export interface InstitutionalSetup {
   score: number;
   qualified: boolean;
   grade: "prime" | "strong" | "forming" | "none";
+  /** both sides, always — a demand read means more when supply reads weak */
+  demand: InstitutionalSideRead;
+  supply: InstitutionalSideRead;
+  /** the balance area the checklist was located against, when there is one */
+  range: InstitutionalRange | null;
+  /** how comparable areas behaved earlier in this series */
+  history: InstitutionalHistory;
   /** open interest change over the window, when available */
   openInterestChangePct: number | null;
   /**
-   * Where the read points, expressed as levels rather than a forecast:
-   * the level that would confirm it and the level that would refute it.
+   * Where the read points, expressed as levels rather than a forecast.
+   * Direction follows `side`: for accumulation the confirm level is above and
+   * invalidation below; for distribution the reverse. Named without a
+   * direction because a field called `confirmAbove` is simply wrong on a
+   * distribution read.
    */
-  confirmAbove: number | null;
-  invalidateBelow: number | null;
+  confirmLevel: number | null;
+  invalidateLevel: number | null;
   /** the next mapped level in the implied direction */
   objective: number | null;
   headline: string;

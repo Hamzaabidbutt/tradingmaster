@@ -10,7 +10,13 @@ import {
   fmtPrice,
   useOpenInTerminal,
 } from "@/components/dashboard/shared";
-import { InstitutionalSetup, InstitutionalZone } from "@/engines/types";
+import {
+  InstitutionalHistory,
+  InstitutionalRange,
+  InstitutionalSetup,
+  InstitutionalSideRead,
+  InstitutionalZone,
+} from "@/engines/types";
 
 interface Entry {
   symbol: string;
@@ -104,20 +110,31 @@ export default function InstitutionalPage() {
           <div className="p-3">
             <p className="mb-2 text-[10px] leading-relaxed text-slate-500">
               Size cannot be filled at one price without moving the market, so it leaves a trail:
-              an imbalance nobody filled, a block price walked away from, selling that hit the bid
-              and went nowhere, forced liquidation that was bought, delta rising while price does
-              not. This sweep collects eight such traces per coin and clusters them by price. A
-              zone qualifies only when at least{" "}
-              <strong className="text-slate-300">four distinct kinds</strong> of evidence land in
-              the same band — repeats of one mechanism are counted once, because a mechanism
-              repeating is not the same as independent confirmation.
+              an imbalance nobody filled, a block price walked away from, aggression that hit the
+              book and went nowhere, forced liquidation that was taken, delta refusing to follow
+              price, swings that step in one direction. This sweep runs a{" "}
+              <strong className="text-slate-300">ten-item checklist twice</strong> — once for
+              demand and once for supply — and clusters the marks by price. A zone qualifies only
+              when at least <strong className="text-slate-300">five distinct kinds</strong> land in
+              the same band; repeats of one mechanism count once, because a mechanism repeating is
+              not independent confirmation.
+            </p>
+            <p className="mb-2 text-[10px] leading-relaxed text-slate-500">
+              Both sides are always shown. Checking only demand made every chart look like
+              accumulation, because a weak supply read was never visible — the asymmetry between
+              them is most of the signal. Where the market is genuinely ranging, the checklist is
+              also located against the range boundaries: demand at a low the market has already
+              defended is a different claim from demand in mid-range. In a trend that item scores
+              zero rather than inventing a boundary.
             </p>
             <p className="mb-2 rounded-lg border border-neon-amber/20 bg-neon-amber/5 px-2 py-1.5 text-[10px] leading-relaxed text-neon-amber/90">
               What this does not do is predict. A footprint says size was worked at a level, not
-              that price will rise from it — accumulation fails regularly and is only visible in
-              hindsight. Each card gives a confirmation level, an invalidation level and an
-              objective; treat those as the read, and the score as conviction that the trail is
-              real, not as a probability of profit.
+              that price will move from it — accumulation and distribution both fail regularly and
+              are only obvious in hindsight. Each card gives a confirmation level, an invalidation
+              level and an objective; treat those as the read, and the score as conviction that the
+              trail is real, not as a probability of profit. The one historical figure — how
+              comparable areas behaved when price returned to them — is measured on this symbol,
+              this timeframe, this window, and is withheld entirely below four resolved cases.
             </p>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -170,7 +187,7 @@ export default function InstitutionalPage() {
                   <div className="space-y-1.5">
                     {footprints.length === 0 ? (
                       <EmptyNote>
-                        Nothing on {data.timeframe} met the four-kinds bar. That is the normal
+                        Nothing on {data.timeframe} met the five-kinds bar. That is the normal
                         result — the threshold exists so the list stays worth reading.
                       </EmptyNote>
                     ) : (
@@ -229,6 +246,7 @@ function Row({
   muted?: boolean;
 }) {
   const s = entry.setup;
+  const distribution = s.demand.score < s.supply.score;
   const gradeColor =
     s.grade === "prime"
       ? "bg-neon-cyan/20 text-neon-cyan"
@@ -250,14 +268,35 @@ function Row({
             {s.grade}
           </span>
           <span className="font-mono text-[11px] text-neon-cyan">{s.score}</span>
-          {s.side !== "none" && (
-            <span className="rounded bg-bull/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-bull">
-              {s.side}
-            </span>
-          )}
+          <span
+            className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+              distribution ? "bg-bear/15 text-bear" : "bg-bull/15 text-bull"
+            }`}
+            title={
+              s.side === "none"
+                ? "The leading side, shown even though nothing qualified — which side the marks favour is worth seeing either way."
+                : undefined
+            }
+          >
+            {distribution ? "distribution" : "accumulation"}
+            {s.side === "none" && " (unqualified)"}
+          </span>
           <span className="font-mono text-[10px] text-slate-400">
             {found.length} of {s.evidence.length} kinds
           </span>
+          {s.range && (
+            <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[9px] text-slate-400">
+              range {(s.range.position * 100).toFixed(0)}%
+            </span>
+          )}
+          {s.history.holdRatePct != null && (
+            <span
+              className="font-mono text-[10px] text-slate-400"
+              title={`Measured on ${s.history.samples} comparable areas in this window — a record, not an edge.`}
+            >
+              held {s.history.holdRatePct.toFixed(0)}% ({s.history.samples})
+            </span>
+          )}
           {s.zone && (
             <span className="font-mono text-[10px] text-slate-300">
               zone {fmtPrice(s.zone.low)}–{fmtPrice(s.zone.high)}
@@ -286,11 +325,36 @@ function Row({
           <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px] sm:grid-cols-4">
             <Cell label="Price" value={fmtPrice(s.price)} />
             <Cell label="Zone mid" value={s.zone ? fmtPrice(s.zone.mid) : "—"} />
-            <Cell label="Confirm above" value={fmtPrice(s.confirmAbove)} tone="bull" />
-            <Cell label="Invalidate below" value={fmtPrice(s.invalidateBelow)} tone="bear" />
-            <Cell label="Objective" value={fmtPrice(s.objective)} tone="bull" />
+            {/* Labels follow the side: "confirm above" is simply wrong on a
+                distribution read, where the confirming break is downward. */}
+            <Cell
+              label={distribution ? "Confirm below" : "Confirm above"}
+              value={fmtPrice(s.confirmLevel)}
+              tone={distribution ? "bear" : "bull"}
+            />
+            <Cell
+              label={distribution ? "Invalidate above" : "Invalidate below"}
+              value={fmtPrice(s.invalidateLevel)}
+              tone={distribution ? "bull" : "bear"}
+            />
+            <Cell
+              label="Objective"
+              value={fmtPrice(s.objective)}
+              tone={distribution ? "bear" : "bull"}
+            />
             <Cell label="Confluence" value={s.zone ? `${s.zone.confluence} kinds` : "—"} />
           </div>
+
+          {/* The two sides, side by side. A demand read is worth far less when
+              the supply read next to it is equally lit, and that comparison is
+              invisible unless both are on screen. */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <SideCard read={s.demand} leading={s.demand.score >= s.supply.score} />
+            <SideCard read={s.supply} leading={s.supply.score > s.demand.score} />
+          </div>
+
+          <RangeStrip range={s.range} price={s.price} />
+          <HistoryBlock history={s.history} side={s.side} />
 
           {/* Evidence ledger — what was found, what was not, and the weight each carried. */}
           <div>
@@ -359,6 +423,177 @@ function Row({
       )}
     </div>
   );
+}
+
+/** One side's headline numbers, so the two can be compared at a glance. */
+function SideCard({ read, leading }: { read: InstitutionalSideRead; leading: boolean }) {
+  const buy = read.side === "accumulation";
+  return (
+    <div
+      className={`rounded border px-2 py-1.5 ${
+        leading
+          ? buy
+            ? "border-bull/30 bg-bull/[0.05]"
+            : "border-bear/30 bg-bear/[0.05]"
+          : "border-white/5 bg-white/[0.02] opacity-70"
+      }`}
+    >
+      <div className="flex items-baseline gap-1.5">
+        <span
+          className={`text-[10px] font-semibold uppercase tracking-wider ${buy ? "text-bull" : "text-bear"}`}
+        >
+          {buy ? "Demand" : "Supply"}
+        </span>
+        <span className="font-mono text-[11px] text-slate-200">{read.score}</span>
+        {read.qualified && (
+          <span className="rounded bg-neon-cyan/15 px-1 text-[8px] font-bold uppercase tracking-wider text-neon-cyan">
+            qualified
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 font-mono text-[9px] text-slate-500">
+        {read.kinds}/{read.evidence.length} items ·{" "}
+        {read.zone ? `${read.zone.confluence} kinds converging` : "no converging area"}
+      </div>
+      {read.zone && (
+        <div className="font-mono text-[9px] text-slate-400">
+          {fmtPrice(read.zone.low)}–{fmtPrice(read.zone.high)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The balance area the checklist was located against, or why there isn't one. */
+function RangeStrip({ range, price }: { range: InstitutionalRange | null; price: number }) {
+  if (!range) {
+    return (
+      <p className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+        No balance area — the market is trending, so range position scores nothing. A high and low
+        taken out of a trend are two arbitrary numbers dressed as levels.
+      </p>
+    );
+  }
+  const pct = Math.max(0, Math.min(100, range.position * 100));
+  return (
+    <div className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5">
+      <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[9px] text-slate-500">
+        <span className="uppercase tracking-wider">Range</span>
+        <span className="text-slate-300">
+          {fmtPrice(range.low)}–{fmtPrice(range.high)}
+        </span>
+        <span>{range.bars} bars</span>
+        <span>
+          low ×{range.touchesLow} · high ×{range.touchesHigh}
+        </span>
+        <span className="ml-auto text-neon-cyan">{pct.toFixed(0)}%</span>
+      </div>
+      {/* Where price sits between the two boundaries the market has defended. */}
+      <div className="relative mt-1 h-1.5 rounded-full bg-gradient-to-r from-bull/25 via-white/5 to-bear/25">
+        <span
+          className="absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 rounded-full bg-neon-cyan"
+          style={{ left: `${pct}%` }}
+          aria-hidden
+        />
+      </div>
+      <div className="mt-0.5 flex justify-between font-mono text-[8px] text-slate-600">
+        <span>{fmtPrice(range.low)} (price {fmtPrice(price)})</span>
+        <span>{fmtPrice(range.high)}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What comparable areas did earlier in this same series.
+ *
+ * The rate is deliberately absent below the engine's sample floor — the cases
+ * are still listed, because seeing four outcomes is useful where a percentage
+ * computed from four is misleading.
+ */
+function HistoryBlock({
+  history,
+  side,
+}: {
+  history: InstitutionalHistory;
+  side: InstitutionalSetup["side"];
+}) {
+  return (
+    <div className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5">
+      <div className="pb-1 text-[9px] uppercase tracking-[0.14em] text-slate-600">
+        What happened last time — measured, not forecast
+      </div>
+      {history.holdRatePct != null ? (
+        <div className="mb-1 flex flex-wrap items-baseline gap-x-3 font-mono text-[10px]">
+          <span className="text-slate-300">
+            {history.held} held / {history.broke} broke
+          </span>
+          <span className="text-neon-cyan">{history.holdRatePct.toFixed(0)}% held</span>
+          {history.medianFavourablePct != null && (
+            <span className="text-bull">
+              median +{history.medianFavourablePct.toFixed(2)}% in favour
+            </span>
+          )}
+          {history.medianAdversePct != null && (
+            <span className="text-bear">
+              median {history.medianAdversePct.toFixed(2)}% against
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="mb-1 font-mono text-[10px] text-slate-500">
+          {history.samples} resolved case{history.samples === 1 ? "" : "s"} — rate withheld
+        </div>
+      )}
+      <p className="mb-1 text-[10px] leading-relaxed text-slate-500">{history.note}</p>
+      {history.analogues.length > 0 && (
+        <div className="space-y-0.5">
+          {history.analogues.map((a, i) => (
+            <div
+              key={i}
+              className="flex flex-wrap items-baseline gap-x-2 rounded bg-white/[0.03] px-1.5 py-1 font-mono text-[9px]"
+            >
+              <span className="text-slate-500">{localDate(a.time)}</span>
+              <span className="text-slate-300">
+                {fmtPrice(a.low)}–{fmtPrice(a.high)}
+              </span>
+              <span className="text-slate-500">{a.confluence} kinds</span>
+              <span
+                className={
+                  a.outcome === "held"
+                    ? "text-bull"
+                    : a.outcome === "broke"
+                      ? "text-bear"
+                      : "text-slate-600"
+                }
+              >
+                {a.outcome}
+              </span>
+              {a.outcome !== "unresolved" && (
+                <span className="text-slate-500">
+                  +{a.favourablePct.toFixed(2)}% / −{Math.abs(a.adversePct).toFixed(2)}%
+                </span>
+              )}
+              <span className="ml-auto text-slate-600">
+                {a.tapTime ? `tapped ${localDate(a.tapTime)}` : "never tapped"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {side === "none" && (
+        <p className="mt-1 text-[9px] text-slate-600">
+          Nothing qualified on this symbol, so these are the historical areas of the leading side
+          rather than a record behind a live signal.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function localDate(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function ZoneRow({ zone }: { zone: InstitutionalZone }) {

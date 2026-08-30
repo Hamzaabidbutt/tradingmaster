@@ -73,6 +73,8 @@ function Terminal() {
     setTimeframe,
     inspectorPos,
     setInspectorPos,
+    inspectorMinimized,
+    toggleInspectorMinimized,
   } = useMarketStore();
   const searchParams = useSearchParams();
 
@@ -210,6 +212,8 @@ function Terminal() {
               walls={walls}
               inspectorPos={inspectorPos}
               onInspectorMove={setInspectorPos}
+              inspectorMinimized={inspectorMinimized}
+              onInspectorMinimizeToggle={toggleInspectorMinimized}
             />
           </div>
         </div>

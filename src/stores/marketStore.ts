@@ -61,12 +61,19 @@ interface MarketState {
   pulseWindowMinutes: PulseWindow;
   /** null until the user drags the inspector; then remembered across sessions */
   inspectorPos: InspectorPosition | null;
+  /**
+   * Collapsed to a one-line strip. Persisted because it is a standing
+   * preference about screen real estate, not a per-visit choice — a user who
+   * minimised it once wants it minimised tomorrow.
+   */
+  inspectorMinimized: boolean;
   setSymbol: (s: string) => void;
   setTimeframe: (tf: Timeframe) => void;
   toggleOverlay: (key: keyof OverlayToggles) => void;
   toggleSidebar: () => void;
   setPulseWindow: (m: PulseWindow) => void;
   setInspectorPos: (p: InspectorPosition | null) => void;
+  toggleInspectorMinimized: () => void;
 }
 
 export const useMarketStore = create<MarketState>()(
@@ -109,6 +116,7 @@ export const useMarketStore = create<MarketState>()(
       // five minutes, which is mostly noise.
       pulseWindowMinutes: 60,
       inspectorPos: null,
+      inspectorMinimized: false,
       setSymbol: (symbol) => set({ symbol }),
       setTimeframe: (timeframe) => set({ timeframe }),
       toggleOverlay: (key) =>
@@ -116,6 +124,8 @@ export const useMarketStore = create<MarketState>()(
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setPulseWindow: (pulseWindowMinutes) => set({ pulseWindowMinutes }),
       setInspectorPos: (inspectorPos) => set({ inspectorPos }),
+      toggleInspectorMinimized: () =>
+        set((st) => ({ inspectorMinimized: !st.inspectorMinimized })),
     }),
     {
       name: "tm-market",

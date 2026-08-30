@@ -41,6 +41,9 @@ interface Props {
   /** where the inspector has been dragged to; null = its default corner */
   inspectorPos?: InspectorPosition | null;
   onInspectorMove?: (pos: InspectorPosition | null) => void;
+  /** inspector collapsed to its header strip */
+  inspectorMinimized?: boolean;
+  onInspectorMinimizeToggle?: () => void;
 }
 
 const BULL = "#00e5a0";
@@ -81,6 +84,8 @@ export default function TradingChart({
   walls,
   inspectorPos,
   onInspectorMove,
+  inspectorMinimized,
+  onInspectorMinimizeToggle,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -1201,6 +1206,8 @@ export default function TradingChart({
           pricePrecision={pricePrecision}
           position={inspectorPos}
           onMove={onInspectorMove}
+          minimized={inspectorMinimized}
+          onToggleMinimize={onInspectorMinimizeToggle}
         />
       )}
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CandleStats } from "@/engines/candleStats";
 import { StoryLine } from "@/engines/candleStory";
 import type { InspectorPosition } from "@/stores/marketStore";
@@ -17,10 +18,19 @@ export const DEFAULT_INSPECTOR_POSITION: InspectorPosition = { x: 16, y: 96 };
 /**
  * Measure the card against the **viewport**, not the chart.
  *
- * The card is `position: fixed`, so it can be dragged anywhere on screen —
- * onto a second monitor's worth of page, over the panels below, wherever it is
- * out of the way. Clamping it to the chart would have made "drag it out of the
- * way" mean "drag it to a different part of the thing you are trying to see".
+ * The card is `position: fixed` *and portalled to `document.body`*, so it can
+ * be dragged anywhere on screen — over the sidebar, over the panels below,
+ * wherever it is out of the way. Clamping it to the chart would have made
+ * "drag it out of the way" mean "drag it to a different part of the thing you
+ * are trying to see".
+ *
+ * The portal is not decoration. `position: fixed` resolves against the nearest
+ * ancestor with a transform, filter or **backdrop-filter** rather than the
+ * viewport, and every panel in this app is a `.glass` card carrying
+ * `backdrop-filter: blur(14px)`. Left in the chart's DOM the card was pinned
+ * inside that card's box and clipped by its `overflow: hidden`, so no amount
+ * of `fixed` would let it reach the navigation. Rendering into `body` is the
+ * only reliable way out of both.
  */
 function measure(card: HTMLElement) {
   const cardRect = card.getBoundingClientRect();
@@ -76,6 +86,8 @@ export default function CandleInspector({
   live,
   position,
   onMove,
+  minimized = false,
+  onToggleMinimize,
 }: {
   stats: CandleStats;
   pricePrecision: number;
@@ -83,10 +95,13 @@ export default function CandleInspector({
   live?: boolean;
   /** the bar's narrative, from `buildCandleStory` */
   story?: StoryLine[];
-  /** where the card sits, in px from the chart's top-left */
+  /** where the card sits, in viewport px */
   position?: InspectorPosition | null;
   /** called as the card is dragged, and with null on a reset */
   onMove?: (pos: InspectorPosition | null) => void;
+  /** collapsed to a single strip */
+  minimized?: boolean;
+  onToggleMinimize?: () => void;
 }) {
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
@@ -95,6 +110,11 @@ export default function CandleInspector({
   const grabRef = useRef<InspectorPosition | null>(null);
   const [storyOpen, setStoryOpen] = useState(true);
   const pos = position ?? DEFAULT_INSPECTOR_POSITION;
+
+  // The portal target only exists in the browser, so the first render must
+  // match the server's (nothing) and the portal opens on mount.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Re-clamp when the window resizes, so a card parked at the edge of a wide
   // window is not stranded off-screen in a narrow one with no way back.
@@ -106,9 +126,13 @@ export default function CandleInspector({
       const next = clampPosition(pos, m.card, m.container);
       if (!samePosition(next, pos)) onMove(next);
     };
+    // Run once on the spot as well as on resize: collapsing changes the card's
+    // height, and a card parked against the bottom edge would otherwise keep
+    // the taller box's coordinates and float free of it.
+    reclamp();
     window.addEventListener("resize", reclamp);
     return () => window.removeEventListener("resize", reclamp);
-  }, [pos, onMove]);
+  }, [pos, onMove, minimized]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const card = cardRef.current;
@@ -142,17 +166,26 @@ export default function CandleInspector({
     }
   }, []);
 
-  return (
+  if (!mounted) return null;
+
+  const card = (
     // pointer-events-none throughout: the card sits over the candles, and a
     // solid block would swallow the crosshair that drives it — the readings
     // would freeze exactly where the card is.
+    //
+    // z-50 clears the mobile bottom nav (z-40) and the desktop sidebar, which
+    // is in normal flow; dragging the card over either leaves it readable.
     <div
       ref={cardRef}
-      className="pointer-events-none fixed z-50 w-[268px] max-w-[calc(100vw-1.5rem)] rounded-xl border border-white/10 bg-base-900/95 p-2.5 shadow-glass backdrop-blur-xl"
+      className={`pointer-events-none fixed z-50 max-w-[calc(100vw-1.5rem)] rounded-xl border border-white/10 bg-base-900/95 shadow-glass backdrop-blur-xl ${
+        minimized ? "w-auto p-1.5" : "w-[268px] p-2.5"
+      }`}
       style={{ left: pos.x, top: pos.y }}
     >
       <div
-        className={`-m-1 mb-1.5 flex items-center justify-between gap-2 rounded-lg p-1 ${
+        className={`-m-1 flex items-center justify-between gap-2 rounded-lg p-1 ${
+          minimized ? "" : "mb-1.5"
+        } ${
           onMove ? "pointer-events-auto cursor-move touch-none select-none hover:bg-white/[0.06]" : ""
         }`}
         onPointerDown={onMove ? onPointerDown : undefined}
@@ -182,6 +215,25 @@ export default function CandleInspector({
               live
             </span>
           )}
+          {onToggleMinimize && (
+            // pointer-events-auto and a stopped propagation: this sits on the
+            // drag handle, and without it a tap would start a drag instead of
+            // toggling. Sized for a finger, not just a cursor.
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleMinimize();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="pointer-events-auto rounded px-1.5 py-0.5 text-[11px] leading-none text-slate-400 hover:bg-white/10 hover:text-slate-100"
+              aria-expanded={!minimized}
+              aria-label={minimized ? "Expand candle inspector" : "Minimize candle inspector"}
+              title={minimized ? "Expand" : "Minimize — keeps the header strip only"}
+            >
+              {minimized ? "▣" : "▁"}
+            </button>
+          )}
           {onMove && (
             <span aria-hidden className="text-[11px] leading-none text-slate-600">
               ⠿
@@ -190,6 +242,29 @@ export default function CandleInspector({
         </span>
       </div>
 
+      {/*
+        Minimized: one strip with the three readings worth glancing at while
+        the card is out of the way — how big the bar is, who was aggressive,
+        and the net. Everything else is a click away rather than gone.
+      */}
+      {minimized && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 px-0.5 font-mono text-[10px]">
+          <Pair label="RNG" value={`${stats.rangePct.toFixed(2)}%`} />
+          <Pair
+            label="BUY"
+            value={`${stats.buyPct.toFixed(0)}%`}
+            tone={stats.buyPct >= 55 ? "bull" : stats.buyPct <= 45 ? "bear" : "plain"}
+          />
+          <Pair
+            label="Δ"
+            value={`${stats.deltaVolume >= 0 ? "+" : ""}${fmt(stats.deltaVolume)}`}
+            tone={stats.deltaVolume >= 0 ? "bull" : "bear"}
+          />
+        </div>
+      )}
+
+      {!minimized && (
+      <>
       <div className="grid grid-cols-2 gap-1">
         <Row label="High" value={p(stats.high)} />
         <Row label="Low" value={p(stats.low)} />
@@ -313,8 +388,12 @@ export default function CandleInspector({
           )}
         </>
       )}
+      </>
+      )}
     </div>
   );
+
+  return createPortal(card, document.body);
 }
 
 /** Group story lines by section, preserving the order they were written in. */
