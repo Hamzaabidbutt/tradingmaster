@@ -201,6 +201,57 @@ export interface OpenInterestPoint {
   openInterest: number;
 }
 
+export interface FundingPoint {
+  /** funding settlement time, unix seconds */
+  time: number;
+  /** the realised rate for that interval, as a fraction (0.0001 = 0.01%) */
+  rate: number;
+}
+
+/**
+ * Realised funding history.
+ *
+ * `/fapi/v1/fundingRate` returns *settled* rates — what was actually paid at
+ * each 8-hour settlement — rather than the live predicted rate from
+ * `premiumIndex`. Settled is the right series for reading positioning after
+ * the fact: the predicted rate moves continuously and reflects the last few
+ * minutes of basis, while what the crowd actually paid over days is the thing
+ * that says who has been carrying the position.
+ *
+ * Returns `[]` on any failure, like the open-interest fetch. Funding is one
+ * checklist item among several; a symbol whose funding cannot be read should
+ * lose that item, not the whole scan.
+ */
+export async function fetchFundingRateHist(
+  symbol: string,
+  limit = 21
+): Promise<FundingPoint[]> {
+  const cacheKey = `funding:${symbol}:${limit}`;
+  const cached = cacheGet<FundingPoint[]>(cacheKey);
+  if (cached) return cached;
+  try {
+    const res = await fetch(
+      `${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&limit=${Math.min(limit, 1000)}`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) return [];
+    const raw = await res.json();
+    if (!Array.isArray(raw)) return [];
+    const points: FundingPoint[] = raw
+      .map((p: { fundingTime?: number | string; fundingRate?: number | string }) => ({
+        time: Math.floor(Number(p.fundingTime) / 1000),
+        rate: Number(p.fundingRate),
+      }))
+      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.rate));
+    // Settlements are 8h apart, so a short cache is plenty and keeps a
+    // full-universe sweep from re-requesting the same series per timeframe.
+    cacheSet(cacheKey, points, 300_000);
+    return points;
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchOpenInterestHist(
   symbol: string,
   period: "5m" | "15m" | "30m" | "1h" | "4h" | "1d" = "5m",
