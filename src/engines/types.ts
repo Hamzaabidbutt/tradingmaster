@@ -1489,6 +1489,30 @@ export interface InstitutionalHistory {
   note: string;
 }
 
+/**
+ * What the funding series says about who has been paying to hold the position.
+ *
+ * Funding is the clearest positioning signal in perpetuals precisely because
+ * it is a *cost*, not an opinion: whoever pays it is the crowded side, and
+ * they are paying every settlement to stay there. A price that will not fall
+ * while shorts are being paid to hold is a different event from the same price
+ * action with funding flat.
+ */
+export interface InstitutionalFunding {
+  /** mean realised rate over the window, as a percentage per settlement */
+  avgRatePct: number;
+  /** the most recent settled rate, percent */
+  latestRatePct: number;
+  /** settlements in the window */
+  samples: number;
+  /** share of settlements where the sign matched the mean, 0-1 */
+  consistency: number;
+  /** who has been paying: longs pay when the rate is positive */
+  payer: "longs" | "shorts" | "balanced";
+  /** cumulative cost to the paying side over the window, percent */
+  cumulativePct: number;
+}
+
 /** One side's complete read. Both sides are always evaluated. */
 export interface InstitutionalSideRead {
   side: "accumulation" | "distribution";
@@ -1525,6 +1549,8 @@ export interface InstitutionalSetup {
   history: InstitutionalHistory;
   /** open interest change over the window, when available */
   openInterestChangePct: number | null;
+  /** the funding read, or null when the series was unavailable */
+  funding: InstitutionalFunding | null;
   /**
    * Where the read points, expressed as levels rather than a forecast.
    * Direction follows `side`: for accumulation the confirm level is above and

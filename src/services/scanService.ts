@@ -1,5 +1,10 @@
 import { cacheGet, cacheSet } from "@/lib/cache";
-import { fetchAllTickers, fetchKlines, fetchOpenInterestHist } from "@/lib/binance";
+import {
+  fetchAllTickers,
+  fetchFundingRateHist,
+  fetchKlines,
+  fetchOpenInterestHist,
+} from "@/lib/binance";
 import { fetchFuturesSymbols } from "@/lib/symbols";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/db";
@@ -704,9 +709,14 @@ export async function scanInstitutional(opts: {
   const ranked = takeDepth(await rankUniverse(), opts.depth ?? 50);
 
   const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
-    const [candles, oi] = await Promise.all([
+    // Three calls per symbol here rather than one. Funding history is cached
+    // for five minutes and settles only every eight hours, so across a
+    // full-universe sweep on several timeframes it is fetched once per symbol
+    // rather than once per scan.
+    const [candles, oi, funding] = await Promise.all([
       fetchKlines(r.symbol, opts.timeframe, SCAN_BARS),
       fetchOpenInterestHist(r.symbol, "1h", 48).catch(() => []),
+      fetchFundingRateHist(r.symbol, 21).catch(() => []),
     ]);
     return {
       symbol: r.symbol,
@@ -718,7 +728,8 @@ export async function scanInstitutional(opts: {
         r.symbol,
         opts.timeframe,
         candles,
-        oi.length > 0 ? oi.map((p) => p.openInterest) : null
+        oi.length > 0 ? oi.map((p) => p.openInterest) : null,
+        funding.length > 0 ? funding : null
       ),
     } satisfies InstitutionalEntry;
   });

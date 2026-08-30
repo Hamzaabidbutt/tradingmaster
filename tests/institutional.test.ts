@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectInstitutional, Mark, measureHistory } from "@/engines/institutional";
+import {
+  detectInstitutional,
+  Mark,
+  measureHistory,
+  summariseFunding,
+} from "@/engines/institutional";
 import { Candle } from "@/engines/types";
 import { syntheticCandles } from "./helpers";
 
@@ -580,6 +585,96 @@ describe("detectInstitutional", () => {
     expect(r.explanation.join(" ")).toMatch(/Range: /);
   });
 
+  /* ---- Funding ---- */
+
+  it("reads the payer from Binance's sign convention, not the other way round", () => {
+    // Positive rate = longs pay shorts. Getting this backwards would invert
+    // every funding read on the page while still looking plausible.
+    const longsPay = summariseFunding([{ rate: 0.0003 }, { rate: 0.0004 }, { rate: 0.00035 }])!;
+    expect(longsPay.payer).toBe("longs");
+    expect(longsPay.avgRatePct).toBeGreaterThan(0);
+
+    const shortsPay = summariseFunding([{ rate: -0.0003 }, { rate: -0.0004 }, { rate: -0.00035 }])!;
+    expect(shortsPay.payer).toBe("shorts");
+    expect(shortsPay.avgRatePct).toBeLessThan(0);
+  });
+
+  it("calls near-zero funding balanced rather than picking a side", () => {
+    // A hundredth of a basis point is noise around the anchor. Reporting it as
+    // "longs pay" would manufacture a crowded cohort out of rounding.
+    const f = summariseFunding([{ rate: 0.0000001 }, { rate: -0.0000002 }, { rate: 0.0000001 }])!;
+    expect(f.payer).toBe("balanced");
+  });
+
+  it("separates a standing cost from a single spike via consistency", () => {
+    const steady = summariseFunding(Array.from({ length: 10 }, () => ({ rate: -0.0002 })))!;
+    expect(steady.consistency).toBe(1);
+
+    // One large negative print in an otherwise positive series: the mean can
+    // still come out negative while almost nothing agrees with it.
+    const spike = summariseFunding([
+      { rate: 0.0001 },
+      { rate: 0.0001 },
+      { rate: 0.0001 },
+      { rate: 0.0001 },
+      { rate: -0.01 },
+    ])!;
+    expect(spike.payer).toBe("shorts");
+    expect(spike.consistency).toBeLessThan(0.7);
+  });
+
+  it("sums the cumulative cost rather than averaging it", () => {
+    const f = summariseFunding([{ rate: -0.0001 }, { rate: -0.0001 }, { rate: -0.0001 }])!;
+    // Three settlements at -0.01% each = -0.03% carried, which is the figure
+    // that matters to the side paying it.
+    expect(f.cumulativePct).toBeCloseTo(-0.03, 5);
+    expect(f.avgRatePct).toBeCloseTo(-0.01, 5);
+    expect(f.latestRatePct).toBeCloseTo(-0.01, 5);
+  });
+
+  it("declines to summarise a series too short to mean anything", () => {
+    expect(summariseFunding([])).toBeNull();
+    expect(summariseFunding([{ rate: 0.0001 }])).toBeNull();
+    expect(summariseFunding([{ rate: 0.0001 }, { rate: 0.0002 }])).toBeNull();
+  });
+
+  it("scores funding for the side the crowd is NOT on", () => {
+    const candles = syntheticCandles(240, 13, 100);
+    // Shorts paying persistently: supports a demand read, argues against supply.
+    const shortsPay = Array.from({ length: 10 }, () => ({ rate: -0.0004 }));
+    const r = detectInstitutional("TESTUSDT", "1h", candles, RISING_OI, shortsPay);
+
+    const demandItem = r.demand.evidence.find((e) => e.key === "funding")!;
+    const supplyItem = r.supply.evidence.find((e) => e.key === "funding")!;
+    expect(demandItem.found).toBe(true);
+    expect(supplyItem.found).toBe(false);
+    expect(demandItem.score).toBeGreaterThan(supplyItem.score);
+    // The losing side must say *why* rather than merely report absence.
+    expect(supplyItem.detail).toMatch(/same\b.*side|argues against/i);
+  });
+
+  it("reports no funding read when the series is unavailable", () => {
+    const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, 13, 100), RISING_OI, null);
+    expect(r.funding).toBeNull();
+    const item = r.demand.evidence.find((e) => e.key === "funding")!;
+    expect(item.found).toBe(false);
+    expect(item.score).toBe(0);
+    expect(item.detail).toMatch(/No funding history/i);
+  });
+
+  it("scores a bigger standing cost higher than a token one", () => {
+    const candles = syntheticCandles(240, 13, 100);
+    const token = Array.from({ length: 10 }, () => ({ rate: -0.00002 }));
+    const heavy = Array.from({ length: 10 }, () => ({ rate: -0.0005 }));
+    const cheap = detectInstitutional("TESTUSDT", "1h", candles, RISING_OI, token)
+      .demand.evidence.find((e) => e.key === "funding")!;
+    const dear = detectInstitutional("TESTUSDT", "1h", candles, RISING_OI, heavy)
+      .demand.evidence.find((e) => e.key === "funding")!;
+    // Right sign at a tenth of a basis point costs nobody anything; it must
+    // not score the same as a crowd being bled every settlement.
+    expect(dear.score).toBeGreaterThan(cheap.score);
+  });
+
   /* ---- Tradable geometry ---- */
 
   /**
@@ -589,7 +684,11 @@ describe("detectInstitutional", () => {
    * would be green and would be checking nothing.
    */
   const RISING_OI = [100, 110, 125, 140, 160];
-  const GEOMETRY_SEEDS = [3, 11, 29, 47, 61, 2, 13, 37, 5, 23];
+  // Widened when the qualification bar rose with the funding item: 17 is the
+  // seed that qualifies and still withholds the trade, 41 the one that
+  // qualifies with it. Without both, half the assertions below would be
+  // checking an empty set.
+  const GEOMETRY_SEEDS = [3, 11, 29, 47, 61, 2, 13, 37, 5, 23, 17, 41];
 
   it("reaches the qualified-with-trade state on at least one fixture", () => {
     const reads = GEOMETRY_SEEDS.map((seed) =>

@@ -14,6 +14,7 @@ import {
   DeltaAnalysis,
   InstitutionalAnalogue,
   InstitutionalEvidence,
+  InstitutionalFunding,
   InstitutionalHistory,
   InstitutionalRange,
   InstitutionalSetup,
@@ -63,6 +64,15 @@ import {
  * taking a lookback high and low out of a trending market would produce two
  * arbitrary numbers wearing the costume of levels.
  *
+ * ## Funding: the positioning half
+ *
+ * The chart says where size was worked; funding says who is paying to sit on
+ * the other side of it. That is the one input here that is a *cost* rather
+ * than an inference — whoever pays funding is the crowded side, and they are
+ * charged for it every settlement. Accumulation therefore wants shorts paying;
+ * distribution wants longs paying. Funding agreeing with the side being read
+ * argues against the footprint rather than for it, and is scored that way.
+ *
  * ## What "where the market is headed" means here
  *
  * A *level*, not a direction with a probability attached. The output names the
@@ -94,12 +104,17 @@ const MAX_ZONE_WIDTH_PCT = 2.5;
 /** Evidence further than this from price is history, not a live area. */
 const MAX_DISTANCE_PCT = 12;
 /**
- * Raised alongside the checklist. Adding items must not make qualification
- * easier — a longer list with an unchanged bar is a loosened filter wearing
- * the costume of a more thorough one.
+ * Raised alongside the checklist, every time it grows. Adding items must not
+ * make qualification easier — a longer list with an unchanged bar is a
+ * loosened filter wearing the costume of a more thorough one.
+ *
+ * The arithmetic, so the next change can follow it: ten items carried 120
+ * points of weight and the bar was 64 (53% of what was available) on 5 found
+ * items (50% of the list). Funding adds a eleventh item and 10 more points, so
+ * the bar moves to 68 of 130 (52%) on 6 of 11 (55%).
  */
-const QUALIFY_SCORE = 64;
-const QUALIFY_KINDS = 5;
+const QUALIFY_SCORE = 68;
+const QUALIFY_KINDS = 6;
 
 /* Range detection */
 const RANGE_LOOKBACK = 60;
@@ -243,6 +258,39 @@ export function detectRange(
   };
 }
 
+/**
+ * Reduce a funding series to a positioning read.
+ *
+ * Sign convention is Binance's: a **positive** rate means longs pay shorts, so
+ * a positive average marks longs as the crowded side. `consistency` is what
+ * separates a genuine standing cost from a single outlier settlement — three
+ * weeks of steady −0.02% is a crowd being bled, while one −0.3% print in an
+ * otherwise flat series is a squeeze that has already happened.
+ *
+ * `cumulativePct` is the sum rather than the mean because that is the number
+ * that actually matters to the crowded side: what holding this position has
+ * cost them so far, which is what eventually forces the exit.
+ */
+export function summariseFunding(points: { rate: number }[]): InstitutionalFunding | null {
+  if (points.length < 3) return null;
+  const rates = points.map((p) => p.rate);
+  const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
+  const sameSign = rates.filter((r) => (mean >= 0 ? r >= 0 : r < 0)).length;
+  const avgRatePct = mean * 100;
+  // Below a basis point per settlement the rate is noise around the anchor,
+  // not anybody paying to hold anything.
+  const payer: InstitutionalFunding["payer"] =
+    Math.abs(avgRatePct) < 0.001 ? "balanced" : avgRatePct > 0 ? "longs" : "shorts";
+  return {
+    avgRatePct: Number(avgRatePct.toFixed(5)),
+    latestRatePct: Number((rates[rates.length - 1] * 100).toFixed(5)),
+    samples: rates.length,
+    consistency: Number((sameSign / rates.length).toFixed(3)),
+    payer,
+    cumulativePct: Number((rates.reduce((s, r) => s + r, 0) * 100).toFixed(4)),
+  };
+}
+
 interface Ctx {
   candles: Candle[];
   price: number;
@@ -255,6 +303,7 @@ interface Ctx {
   pd: PremiumDiscount;
   range: InstitutionalRange | null;
   oiChangePct: number | null;
+  funding: InstitutionalFunding | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -493,7 +542,48 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
           : `Price is at ${(range.position * 100).toFixed(0)}% of the ${fmt(range.low)}–${fmt(range.high)} range — not at the ${wantedEdge}, so this evidence is not being read at the edge where the reactions have happened.`,
   });
 
-  /* ---- 10. Open interest ---- */
+  /* ---- 10. Funding: who is paying to hold the other side ----
+     The mirror image of the side being read. Accumulation wants *shorts*
+     paying — a crowd short into an area that will not break, bleeding every
+     settlement, is the cohort whose exit becomes the move. Distribution wants
+     longs paying. Funding that agrees with the side being read is the weakest
+     possible version of this item, because it means the crowd is already
+     positioned the way the footprint points. */
+  const funding = ctx.funding;
+  const wantedPayer = buy ? "shorts" : "longs";
+  const payerOpposes = funding != null && funding.payer === wantedPayer;
+  // One outlier settlement is a squeeze that already happened; a standing cost
+  // is a crowd still carrying the position.
+  const persistent = funding != null && funding.consistency >= 0.7 && funding.samples >= 6;
+  const fundingFound = payerOpposes && persistent;
+  evidence.push({
+    key: "funding",
+    label: buy ? "Shorts are paying to stay short" : "Longs are paying to stay long",
+    found: fundingFound,
+    weight: 10,
+    score: fundingFound
+      ? // Scaled by how expensive the position actually is. A tenth of a basis
+        // point per settlement is technically the right sign and costs nobody
+        // anything; the item should not score the same as a crowd paying 0.05%
+        // three times a day.
+        Math.min(10, 5 + Math.min(5, Math.abs(funding!.avgRatePct) * 200))
+      : payerOpposes
+        ? 3
+        : 0,
+    price: null,
+    detail:
+      funding == null
+        ? "No funding history available, so who is paying to hold the other side of this cannot be read."
+        : fundingFound
+          ? `${wantedPayer === "shorts" ? "Shorts" : "Longs"} have paid funding on ${(funding.consistency * 100).toFixed(0)}% of the last ${funding.samples} settlements, averaging ${funding.avgRatePct.toFixed(4)}% and ${funding.cumulativePct.toFixed(3)}% cumulative. Funding is a cost, not an opinion — the side paying it is the crowded one, and it is being charged every settlement to stay there. Price refusing to go their way while they pay for the privilege is the positioning half of ${buy ? "accumulation" : "distribution"}.`
+          : payerOpposes
+            ? `${wantedPayer === "shorts" ? "Shorts" : "Longs"} are paying on average, but inconsistently (${(funding.consistency * 100).toFixed(0)}% of ${funding.samples} settlements). That reads as one or two spikes rather than a standing cost — a squeeze that has already happened, not a crowd still carrying it.`
+            : funding.payer === "balanced"
+              ? `Funding is flat (${funding.avgRatePct.toFixed(4)}% average) — nobody is paying meaningfully to hold either side, so there is no crowded cohort here for the move to come from.`
+              : `${funding.payer === "longs" ? "Longs" : "Shorts"} are the ones paying (${funding.avgRatePct.toFixed(4)}% average), which is the *same* side this read points. The crowd is already positioned this way, so funding argues against the footprint rather than for it.`,
+  });
+
+  /* ---- 11. Open interest ---- */
   const oi = ctx.oiChangePct;
   const oiBuilding = oi != null && oi > 2;
   evidence.push({
@@ -705,7 +795,8 @@ export function detectInstitutional(
   symbol: string,
   timeframe: string,
   candles: Candle[],
-  openInterest?: number[] | null
+  openInterest?: number[] | null,
+  fundingHistory?: { rate: number }[] | null
 ): InstitutionalSetup {
   const price = candles[candles.length - 1]?.close ?? 0;
   const emptySide = (side: Side): InstitutionalSideRead => ({
@@ -742,6 +833,7 @@ export function detectInstitutional(
       note: "Not enough history to measure comparable areas.",
     },
     openInterestChangePct: null,
+    funding: null,
     confirmLevel: null,
     invalidateLevel: null,
     objective: null,
@@ -773,6 +865,8 @@ export function detectInstitutional(
     oiChangePct = first > 0 ? Number((((last - first) / first) * 100).toFixed(3)) : 0;
   }
 
+  const funding = fundingHistory ? summariseFunding(fundingHistory) : null;
+
   const ctx: Ctx = {
     candles,
     price,
@@ -785,6 +879,7 @@ export function detectInstitutional(
     pd,
     range,
     oiChangePct,
+    funding,
   };
 
   const demandRaw = collectSide("accumulation", ctx);
@@ -935,6 +1030,7 @@ export function detectInstitutional(
     range,
     history,
     openInterestChangePct: oiChangePct,
+    funding,
     confirmLevel,
     invalidateLevel,
     objective,

@@ -12,6 +12,7 @@ import {
   useOpenInTerminal,
 } from "@/components/dashboard/shared";
 import {
+  InstitutionalFunding,
   InstitutionalHistory,
   InstitutionalRange,
   InstitutionalSetup,
@@ -43,8 +44,9 @@ interface ScanResult {
  *
  * Finds price bands where several *different kinds* of evidence converge —
  * unfilled demand gaps, unmitigated order blocks, absorbed selling, forced
- * supply that was bought, delta divergence, rejection wicks, discount
- * location, and open interest built while price held.
+ * supply that was bought, delta divergence, rejection wicks, discount and
+ * range location, stepping structure, funding paid by the opposite side, and
+ * open interest built while price held.
  *
  * The load-bearing idea is the word *different*. Three order blocks stacked at
  * one price is one mechanism repeating, not three confirmations; a zone only
@@ -114,9 +116,9 @@ export default function InstitutionalPage() {
               an imbalance nobody filled, a block price walked away from, aggression that hit the
               book and went nowhere, forced liquidation that was taken, delta refusing to follow
               price, swings that step in one direction. This sweep runs a{" "}
-              <strong className="text-slate-300">ten-item checklist twice</strong> — once for
+              <strong className="text-slate-300">eleven-item checklist twice</strong> — once for
               demand and once for supply — and clusters the marks by price. A zone qualifies only
-              when at least <strong className="text-slate-300">five distinct kinds</strong> land in
+              when at least <strong className="text-slate-300">six distinct kinds</strong> land in
               the same band; repeats of one mechanism count once, because a mechanism repeating is
               not independent confirmation.
             </p>
@@ -127,6 +129,15 @@ export default function InstitutionalPage() {
               also located against the range boundaries: demand at a low the market has already
               defended is a different claim from demand in mid-range. In a trend that item scores
               zero rather than inventing a boundary.
+            </p>
+            <p className="mb-2 text-[10px] leading-relaxed text-slate-500">
+              Funding is the one input here that is a <em>cost</em> rather than an inference:
+              whoever pays it is the crowded side, and they are charged every settlement to stay
+              there. Accumulation therefore wants <strong className="text-slate-300">shorts</strong>{" "}
+              paying and distribution wants longs paying — funding agreeing with the side being
+              read means the crowd is already positioned that way, which argues against the
+              footprint rather than for it, and is scored that way. A single outlier settlement is
+              a squeeze that already happened; only a consistent standing cost counts.
             </p>
             <p className="mb-2 rounded-lg border border-neon-amber/20 bg-neon-amber/5 px-2 py-1.5 text-[10px] leading-relaxed text-neon-amber/90">
               What this does not do is predict. A footprint says size was worked at a level, not
@@ -163,7 +174,7 @@ export default function InstitutionalPage() {
                 {loading ? "Scanning…" : `Scan ${timeframe} for institutional footprints`}
               </button>
               <span className="text-[9px] text-slate-600">
-                slower than the other sweeps — one extra open-interest request per coin
+                slower than the other sweeps — extra open-interest and funding requests per coin
               </span>
             </div>
 
@@ -188,7 +199,7 @@ export default function InstitutionalPage() {
                   <div className="space-y-1.5">
                     {footprints.length === 0 ? (
                       <EmptyNote>
-                        Nothing on {data.timeframe} met the five-kinds bar. That is the normal
+                        Nothing on {data.timeframe} met the six-kinds bar. That is the normal
                         result — the threshold exists so the list stays worth reading.
                       </EmptyNote>
                     ) : (
@@ -323,6 +334,17 @@ function Row({
               </span>
             </span>
           )}
+          {s.funding && s.funding.payer !== "balanced" && (
+            <span
+              className={`font-mono text-[10px] ${
+                s.funding.payer === "shorts" ? "text-bull" : "text-bear"
+              }`}
+              title={`${s.funding.payer === "shorts" ? "Shorts" : "Longs"} pay ${s.funding.avgRatePct.toFixed(4)}% per settlement on average, over ${s.funding.samples} settlements`}
+            >
+              fund {s.funding.avgRatePct >= 0 ? "+" : ""}
+              {s.funding.avgRatePct.toFixed(3)}%
+            </span>
+          )}
           {s.openInterestChangePct != null && (
             <span
               className={`font-mono text-[10px] ${s.openInterestChangePct >= 0 ? "text-bull" : "text-bear"}`}
@@ -409,6 +431,7 @@ function Row({
             </p>
           )}
 
+          <FundingStrip funding={s.funding} side={s.side} lead={distribution ? "distribution" : "accumulation"} />
           <RangeStrip range={s.range} price={s.price} />
           <HistoryBlock history={s.history} side={s.side} />
 
@@ -516,6 +539,86 @@ function SideCard({ read, leading }: { read: InstitutionalSideRead; leading: boo
           {fmtPrice(read.zone.low)}–{fmtPrice(read.zone.high)}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Who has been paying to hold the opposite side.
+ *
+ * Rendered as its own strip rather than left inside the evidence list because
+ * it is the only input here that is a *cost* rather than an inference, and it
+ * reads against the footprint as readily as for it — funding agreeing with the
+ * side being read means the crowd is already there, which is the opposite of
+ * what an accumulation thesis wants.
+ */
+function FundingStrip({
+  funding,
+  side,
+  lead,
+}: {
+  funding: InstitutionalFunding | null;
+  side: InstitutionalSetup["side"];
+  lead: "accumulation" | "distribution";
+}) {
+  if (!funding) {
+    return (
+      <p className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+        No funding history for this symbol, so who is paying to hold the other side cannot be read.
+      </p>
+    );
+  }
+  const wanted = lead === "accumulation" ? "shorts" : "longs";
+  const supports = funding.payer === wanted;
+  const persistent = funding.consistency >= 0.7 && funding.samples >= 6;
+  const tone = supports && persistent ? "bull" : funding.payer === "balanced" ? "slate" : "bear";
+
+  return (
+    <div
+      className={`rounded border px-2 py-1.5 ${
+        tone === "bull"
+          ? "border-bull/25 bg-bull/[0.05]"
+          : tone === "bear"
+            ? "border-bear/25 bg-bear/[0.05]"
+            : "border-white/5 bg-white/[0.02]"
+      }`}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[9px] text-slate-500">
+        <span className="uppercase tracking-wider">Funding</span>
+        <span
+          className={
+            funding.payer === "balanced"
+              ? "text-slate-400"
+              : funding.payer === "shorts"
+                ? "text-bull"
+                : "text-bear"
+          }
+        >
+          {funding.payer === "balanced" ? "flat" : `${funding.payer} pay`}
+        </span>
+        <span className="text-slate-300">
+          {funding.avgRatePct >= 0 ? "+" : ""}
+          {funding.avgRatePct.toFixed(4)}% avg
+        </span>
+        <span>latest {funding.latestRatePct.toFixed(4)}%</span>
+        <span>
+          {(funding.consistency * 100).toFixed(0)}% of {funding.samples}
+        </span>
+        <span className="ml-auto text-slate-400">
+          {funding.cumulativePct >= 0 ? "+" : ""}
+          {funding.cumulativePct.toFixed(3)}% cumulative
+        </span>
+      </div>
+      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+        {funding.payer === "balanced"
+          ? "Nobody is paying meaningfully to hold either side, so there is no crowded cohort here for a move to come from."
+          : supports
+            ? persistent
+              ? `${wanted === "shorts" ? "Shorts" : "Longs"} have been paying consistently to stay where they are. Funding is a cost rather than an opinion — the side paying it is the crowded one, and price refusing to go their way while they pay for the privilege is the positioning half of ${lead}.`
+              : `${wanted === "shorts" ? "Shorts" : "Longs"} pay on average but inconsistently, which reads as one or two spikes rather than a standing cost — a squeeze that already happened, not a crowd still carrying it.`
+            : `The paying side is the same one this read points, so the crowd is already positioned this way. Funding argues against the footprint here rather than for it.`}
+        {side === "none" && " (Shown for the leading side, though nothing qualified.)"}
+      </p>
     </div>
   );
 }
