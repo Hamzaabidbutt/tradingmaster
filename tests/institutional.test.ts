@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectInstitutional } from "@/engines/institutional";
+import { detectInstitutional, Mark, measureHistory } from "@/engines/institutional";
 import { Candle } from "@/engines/types";
 import { syntheticCandles } from "./helpers";
 
@@ -108,6 +108,114 @@ function accumulationSeries(): Candle[] {
   return out;
 }
 
+/**
+ * A market oscillating between two boundaries it keeps coming back to. The
+ * range detector is deliberately strict — both edges must be visited more than
+ * once — so a fixture is the only way to reach the non-null branch.
+ */
+function rangingSeries(): Candle[] {
+  const out: Candle[] = [];
+  const t = (i: number) => 1_700_000_000 + i * 3600;
+  const low = 100;
+  const high = 108;
+  for (let i = 0; i < 120; i++) {
+    // Four full sweeps between the boundaries over the window.
+    const phase = Math.sin((i / 15) * Math.PI);
+    const mid = (low + high) / 2 + (phase * (high - low)) / 2;
+    const open = mid;
+    const close = mid + (i % 2 === 0 ? 0.12 : -0.12);
+    out.push({
+      time: t(i),
+      open,
+      high: Math.max(open, close) + 0.25,
+      low: Math.min(open, close) - 0.25,
+      close,
+      volume: 1500 + (i % 7) * 80,
+      takerBuyVolume: (1500 + (i % 7) * 80) * (phase < 0 ? 0.58 : 0.42),
+    });
+  }
+  return out;
+}
+
+/**
+ * Demand areas that are subsequently cut through. Without this the `broke`
+ * branch of the historical measurement would never run, and "100% held" would
+ * be indistinguishable from a detector that cannot record a failure.
+ */
+function brokenDemandSeries(): Candle[] {
+  const out: Candle[] = [];
+  const t = (i: number) => 1_700_000_000 + i * 3600;
+  let price = 100;
+
+  // Build: impulses up leaving gaps and blocks behind them.
+  for (let cycle = 0; cycle < 5; cycle++) {
+    for (let i = 0; i < 3; i++) {
+      const open = price;
+      const close = open - 0.6;
+      out.push({
+        time: t(out.length),
+        open,
+        high: open + 0.2,
+        low: close - 0.8, // long lower wicks → rejection marks
+        close,
+        volume: 2000,
+        takerBuyVolume: 2000 * 0.42,
+      });
+      price = close;
+    }
+    for (let i = 0; i < 3; i++) {
+      const open = price + 0.9; // gap up, leaving an unfilled bullish FVG
+      const close = open + 1.6;
+      out.push({
+        time: t(out.length),
+        open,
+        high: close + 0.2,
+        low: open - 0.1,
+        close,
+        volume: 3000,
+        takerBuyVolume: 3000 * 0.7,
+      });
+      price = close;
+    }
+  }
+
+  // Break: a sustained decline that closes back through everything built above.
+  for (let i = 0; i < 60; i++) {
+    const open = price;
+    const close = open - 0.55;
+    out.push({
+      time: t(out.length),
+      open,
+      high: open + 0.15,
+      low: close - 0.2,
+      close,
+      volume: 2600,
+      takerBuyVolume: 2600 * 0.33,
+    });
+    price = close;
+  }
+
+  // Finish on a bounce off the lows, so the *current* read leans demand while
+  // every demand area in the history above was already cut through. Without
+  // this tail the series ends mid-decline, supply leads, and the historical
+  // pass measures supply areas instead of the broken demand ones.
+  for (let i = 0; i < 18; i++) {
+    const open = price;
+    const close = open + 0.35;
+    out.push({
+      time: t(out.length),
+      open,
+      high: close + 0.15,
+      low: open - 1.1, // deep lower wicks: bought back every time
+      close,
+      volume: 4200,
+      takerBuyVolume: 4200 * 0.68,
+    });
+    price = close;
+  }
+  return out;
+}
+
 describe("detectInstitutional", () => {
   it("returns a safe empty read on short history", () => {
     const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(20, 5, 100));
@@ -175,12 +283,24 @@ describe("detectInstitutional", () => {
     }
   });
 
-  it("puts invalidation at the bottom of the zone and confirmation above price", () => {
-    const r = detectInstitutional("TESTUSDT", "1h", accumulationSeries());
-    if (r.zone) expect(r.invalidateBelow).toBe(r.zone.low);
-    if (r.confirmAbove != null) expect(r.confirmAbove).toBeGreaterThan(r.price);
-    if (r.objective != null && r.confirmAbove != null) {
-      expect(r.objective).toBeGreaterThan(r.confirmAbove);
+  it("points its levels in the direction of the leading side", () => {
+    for (const seed of [3, 11, 29, 47, 61]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(200, seed, 100));
+      const buy = r.demand.score >= r.supply.score;
+      if (r.zone) {
+        // Invalidation is the far edge of the area: below it on a demand read,
+        // above it on a supply read. A field named `confirmAbove` would have
+        // been simply wrong on half of these.
+        expect(r.invalidateLevel).toBe(buy ? r.zone.low : r.zone.high);
+      }
+      if (r.confirmLevel != null) {
+        if (buy) expect(r.confirmLevel).toBeGreaterThan(r.price);
+        else expect(r.confirmLevel).toBeLessThan(r.price);
+      }
+      if (r.objective != null && r.confirmLevel != null) {
+        if (buy) expect(r.objective).toBeGreaterThan(r.confirmLevel);
+        else expect(r.objective).toBeLessThan(r.confirmLevel);
+      }
     }
   });
 
@@ -203,6 +323,261 @@ describe("detectInstitutional", () => {
     const oi = r.evidence.find((e) => e.key === "open_interest")!;
     expect(oi.found).toBe(false);
     expect(oi.detail).toMatch(/No open-interest history/i);
+  });
+
+  /* ---- Both sides ---- */
+
+  it("always evaluates supply as well as demand", () => {
+    // The original engine only ever checked the buy side, so every chart came
+    // back looking like accumulation — the absence of a supply read was never
+    // visible. Both must always be present and fully scored.
+    const r = detectInstitutional("TESTUSDT", "1h", accumulationSeries());
+    expect(r.demand.side).toBe("accumulation");
+    expect(r.supply.side).toBe("distribution");
+    expect(r.demand.evidence.length).toBe(r.supply.evidence.length);
+    expect(r.demand.evidence.length).toBeGreaterThanOrEqual(10);
+    for (const read of [r.demand, r.supply]) {
+      expect(read.score).toBeGreaterThanOrEqual(0);
+      expect(read.score).toBeLessThanOrEqual(100);
+      expect(read.kinds).toBeLessThanOrEqual(read.evidence.length);
+    }
+  });
+
+  it("checks buying-absorbed on the supply side, not only selling-absorbed", () => {
+    const r = detectInstitutional("TESTUSDT", "1h", accumulationSeries());
+    const demandLabels = r.demand.evidence.map((e) => e.label);
+    const supplyLabels = r.supply.evidence.map((e) => e.label);
+    expect(demandLabels).toContain("Selling absorbed");
+    expect(supplyLabels).toContain("Buying absorbed");
+    expect(demandLabels).toContain("Unmitigated demand block");
+    expect(supplyLabels).toContain("Unmitigated supply block");
+    expect(demandLabels).toContain("Unfilled demand gap");
+    expect(supplyLabels).toContain("Unfilled supply gap");
+  });
+
+  it("reports the stronger side and mirrors it in the top-level fields", () => {
+    for (const seed of [3, 11, 29, 47, 61]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(200, seed, 100));
+      const lead = r.supply.score > r.demand.score ? r.supply : r.demand;
+      expect(r.score).toBe(lead.score);
+      expect(r.evidence).toBe(lead.evidence);
+      expect(r.zone).toBe(lead.zone);
+      if (r.qualified) expect(r.side).toBe(lead.side);
+    }
+  });
+
+  /* ---- Checklist additions ---- */
+
+  it("carries HH/HL on the demand side and LH/LL on the supply side", () => {
+    const r = detectInstitutional("TESTUSDT", "1h", accumulationSeries());
+    const d = r.demand.evidence.find((e) => e.key === "structure")!;
+    const s = r.supply.evidence.find((e) => e.key === "structure")!;
+    expect(d.label).toBe("Higher highs and higher lows");
+    expect(s.label).toBe("Lower highs and lower lows");
+    // The detail names the actual swing counts either way, so a "not found"
+    // still says what was there rather than only that nothing was.
+    expect(d.detail).toMatch(/HH|higher high/i);
+    expect(s.detail).toMatch(/LH|lower high/i);
+  });
+
+  it("scores range location only when a range actually exists", () => {
+    for (const seed of [2, 13, 37, 61]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(200, seed, 100));
+      const item = r.demand.evidence.find((e) => e.key === "range_location")!;
+      if (r.range == null) {
+        // The whole point of making this conditional: a high and low taken out
+        // of a trend are two arbitrary numbers, so the item must score nothing
+        // rather than manufacture a boundary.
+        expect(item.found).toBe(false);
+        expect(item.score).toBe(0);
+        expect(item.price).toBeNull();
+        expect(item.detail).toMatch(/no balance area/i);
+      } else {
+        expect(r.range.low).toBeLessThan(r.range.high);
+        expect(r.range.position).toBeGreaterThanOrEqual(0);
+        expect(r.range.position).toBeLessThanOrEqual(1);
+        expect(r.range.touchesLow).toBeGreaterThanOrEqual(2);
+        expect(r.range.touchesHigh).toBeGreaterThanOrEqual(2);
+        if (item.found) expect(r.range.position).toBeLessThanOrEqual(0.35);
+      }
+    }
+  });
+
+  it("does not let a longer checklist make qualification easier", () => {
+    // Adding items raises the number of ways to score, so the bar has to rise
+    // with it. Guarded explicitly because the regression is silent: the engine
+    // would simply start qualifying more symbols.
+    for (const seed of [3, 11, 29, 47, 61, 2, 13, 37]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(200, seed, 100));
+      for (const read of [r.demand, r.supply]) {
+        if (read.qualified) {
+          expect(read.score).toBeGreaterThanOrEqual(64);
+          expect(read.kinds).toBeGreaterThanOrEqual(5);
+          expect(read.zone?.confluence ?? 0).toBeGreaterThanOrEqual(2);
+        }
+      }
+    }
+  });
+
+  /* ---- Historical analogues ---- */
+
+  it("measures comparable areas from history rather than modelling them", () => {
+    for (const seed of [3, 11, 29, 47]) {
+      const candles = syntheticCandles(240, seed, 100);
+      const r = detectInstitutional("TESTUSDT", "1h", candles);
+      const h = r.history;
+      expect(h.held + h.broke).toBe(h.samples);
+      for (const a of h.analogues) {
+        expect(a.low).toBeLessThanOrEqual(a.high);
+        // Every analogue must sit on a real bar in the series.
+        expect(candles.some((c) => c.time === a.time)).toBe(true);
+        if (a.tapTime != null) {
+          expect(candles.some((c) => c.time === a.tapTime)).toBe(true);
+          // Price cannot return to an area before the area finished forming.
+          expect(a.tapTime).toBeGreaterThan(a.time);
+        } else {
+          expect(a.outcome).toBe("unresolved");
+        }
+      }
+    }
+  });
+
+  it("withholds a hit rate until it has enough resolved cases", () => {
+    for (const seed of [3, 11, 29, 47, 61, 2, 13, 37]) {
+      const h = detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, seed, 100)).history;
+      if (h.samples < 4) {
+        // A rate from two cases is not a rate, and rendering one invites it to
+        // be read as an edge.
+        expect(h.holdRatePct).toBeNull();
+        expect(h.medianFavourablePct).toBeNull();
+        expect(h.medianAdversePct).toBeNull();
+        expect(h.note).toMatch(/below the 4 needed|Only \d+ comparable/);
+      } else {
+        expect(h.holdRatePct).toBeCloseTo((h.held / h.samples) * 100, 1);
+        expect(h.note).toMatch(/not an edge/i);
+      }
+    }
+  });
+
+  it("never scores an analogue whose outcome has not had time to resolve", () => {
+    const candles = syntheticCandles(240, 11, 100);
+    const lastTime = candles[candles.length - 1].time;
+    const barSeconds = candles[1].time - candles[0].time;
+    const h = detectInstitutional("TESTUSDT", "1h", candles).history;
+    for (const a of h.analogues) {
+      if (a.outcome === "unresolved") continue;
+      // A resolved case needs 20 bars of forward data after the tap; anything
+      // closer to the live edge would be counting the present as history.
+      expect(a.tapTime).not.toBeNull();
+      expect(lastTime - a.tapTime!).toBeGreaterThanOrEqual(20 * barSeconds);
+    }
+  });
+
+  it("records areas that failed, not only the ones that held", () => {
+    // Driven directly rather than through a fixture: reaching the `broke`
+    // branch end-to-end requires four upstream detectors to agree on a
+    // synthetic series, which tests their thresholds rather than this logic.
+    // Guards the failure mode where every sample comes back "held" — a
+    // classifier that cannot record a loss reports 100% on any input.
+    const candles = brokenDemandSeries();
+    const price = candles[candles.length - 1].close;
+    const area = { low: price * 0.98, high: price * 0.99 };
+    // Two distinct sources, so the cluster reaches the confluence floor.
+    const marks: Mark[] = [
+      { source: "order_block", low: area.low, high: area.high, index: 5 },
+      { source: "rejection", low: area.low, high: area.high, index: 6 },
+    ];
+    const h = measureHistory("accumulation", marks, candles);
+    expect(h.samples).toBe(1);
+    // The fixture closes far below that band during its decline.
+    expect(h.broke).toBe(1);
+    expect(h.analogues[0].outcome).toBe("broke");
+    expect(h.analogues[0].tapTime).not.toBeNull();
+  });
+
+  it("counts a hold when price returns to an area and does not close through", () => {
+    // The mirror of the case above, so "held" is not simply the default that
+    // arrives whenever nothing else fires.
+    const candles = rangingSeries();
+    const low = Math.min(...candles.map((c) => c.low));
+    // An area below everything the series ever traded: touched by nothing,
+    // closed through by nothing.
+    const untouched: Mark[] = [
+      { source: "order_block", low: low * 0.9, high: low * 0.92, index: 3 },
+      { source: "rejection", low: low * 0.9, high: low * 0.92, index: 4 },
+    ];
+    const never = measureHistory("accumulation", untouched, candles);
+    expect(never.analogues[0].outcome).toBe("unresolved");
+    expect(never.samples).toBe(0);
+
+    // An area inside the range, which price revisits repeatedly without ever
+    // closing below it.
+    const inside: Mark[] = [
+      { source: "order_block", low: low + 0.05, high: low + 0.4, index: 3 },
+      { source: "rejection", low: low + 0.05, high: low + 0.4, index: 4 },
+    ];
+    const held = measureHistory("accumulation", inside, candles);
+    expect(held.samples).toBe(1);
+    expect(held.held).toBe(1);
+    expect(held.analogues[0].favourablePct).toBeGreaterThan(0);
+  });
+
+  it("will not resolve an area price never returned to", () => {
+    const candles = rangingSeries();
+    const high = Math.max(...candles.map((c) => c.high));
+    // Kept narrow deliberately: a band wider than the 2.5% ceiling is split
+    // into single-source clusters and dropped before it reaches the classifier.
+    const marks: Mark[] = [
+      { source: "order_block", low: high * 1.5, high: high * 1.51, index: 2 },
+      { source: "fvg", low: high * 1.5, high: high * 1.51, index: 3 },
+    ];
+    const h = measureHistory("accumulation", marks, candles);
+    expect(h.samples).toBe(0);
+    expect(h.holdRatePct).toBeNull();
+    expect(h.analogues[0].outcome).toBe("unresolved");
+    expect(h.analogues[0].tapTime).toBeNull();
+  });
+
+  it("ignores areas with only one kind of evidence behind them", () => {
+    const candles = rangingSeries();
+    const price = candles[candles.length - 1].close;
+    // Three marks, one source — a mechanism repeating, not confluence.
+    const marks: Mark[] = [
+      { source: "rejection", low: price * 0.98, high: price * 0.99, index: 3 },
+      { source: "rejection", low: price * 0.981, high: price * 0.991, index: 4 },
+      { source: "rejection", low: price * 0.982, high: price * 0.992, index: 5 },
+    ];
+    expect(measureHistory("accumulation", marks, candles).analogues).toHaveLength(0);
+  });
+
+  it("keeps every area narrow enough to still be a level", () => {
+    for (const seed of [3, 11, 29, 47, 61, 2, 13, 37]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, seed, 100));
+      for (const z of [...r.demand.zones, ...r.supply.zones]) {
+        expect(((z.high - z.low) / r.price) * 100).toBeLessThanOrEqual(2.5);
+      }
+      for (const a of r.history.analogues) {
+        expect(((a.high - a.low) / r.price) * 100).toBeLessThanOrEqual(2.5);
+      }
+    }
+  });
+
+  it("locates the checklist against a real range when one exists", () => {
+    const r = detectInstitutional("TESTUSDT", "1h", rangingSeries());
+    expect(r.range).not.toBeNull();
+    const range = r.range!;
+    expect(range.low).toBeLessThan(range.high);
+    expect(range.touchesLow).toBeGreaterThanOrEqual(2);
+    expect(range.touchesHigh).toBeGreaterThanOrEqual(2);
+    expect(range.position).toBeGreaterThanOrEqual(0);
+    expect(range.position).toBeLessThanOrEqual(1);
+
+    // Demand and supply cannot both be "at the edge" — the item is about where
+    // price sits, and it sits in one place.
+    const d = r.demand.evidence.find((e) => e.key === "range_location")!;
+    const s = r.supply.evidence.find((e) => e.key === "range_location")!;
+    expect(d.found && s.found).toBe(false);
+    expect(r.explanation.join(" ")).toMatch(/Range: /);
   });
 
   it("survives arbitrary series without throwing or emitting bad numbers", () => {
