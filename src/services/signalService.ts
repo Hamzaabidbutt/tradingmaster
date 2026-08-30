@@ -7,7 +7,14 @@ import { STRATEGIES } from "@/engines/strategies";
 import { buildTradeRetrospective, computeWeightAdjustments } from "@/engines/learning";
 import { buildVerdicts } from "@/engines/confluence";
 import { classifyOutcome, computeExcursion, OutcomeSignal } from "@/engines/outcome";
-import { AnalystVerdict, ConfluenceSetup, FullAnalysis, StrategyScore } from "@/engines/types";
+import {
+  AnalystVerdict,
+  ConfluenceSetup,
+  FullAnalysis,
+  InstitutionalSetup,
+  StrategyScore,
+  TradeSetup,
+} from "@/engines/types";
 import { ENGINE_DEFAULTS, FOOTPRINT_SOURCE, TIMEFRAME_MINUTES, Timeframe } from "@/lib/config";
 
 /**
@@ -289,6 +296,192 @@ export async function maybePersistConfluenceSignal(
     return signal.id;
   } catch (err) {
     logger.error("signals.confluence.persist.failed", { symbol: setup.symbol, error: String(err) });
+    return null;
+  }
+}
+
+/**
+ * Persist a composite setup produced by a universe sweep.
+ *
+ * `maybePersistSignal` above does the same job for a single terminal analysis,
+ * which has the whole `FullAnalysis` to hand. The sweep keeps only the setup
+ * and a small snapshot per symbol — holding 500 full analyses in memory to
+ * satisfy a shared signature would be the wrong trade — so this takes the
+ * pieces it actually needs.
+ *
+ * `analystVerdicts` is deliberately absent rather than empty-filled: the sweep
+ * does not run the three independent analysts, and writing "no opinion" for
+ * them would be indistinguishable from three genuine abstentions in every
+ * per-analyst win rate downstream.
+ */
+export async function maybePersistCompositeSignal(
+  symbol: string,
+  timeframe: string,
+  setup: TradeSetup,
+  snapshot: {
+    price: number;
+    bias: string;
+    bullishProbability: number;
+    quoteVolume?: number;
+    priceChangePercent?: number;
+  }
+): Promise<string | null> {
+  try {
+    const existing = await prisma.signal.findFirst({
+      where: { symbol, timeframe, status: "ACTIVE" },
+    });
+    if (existing) return null;
+
+    const signal = await prisma.signal.create({
+      data: {
+        symbol,
+        timeframe,
+        side: setup.side,
+        entry: setup.entry,
+        stopLoss: setup.stopLoss,
+        tp1: setup.tp1,
+        tp2: setup.tp2,
+        tp3: setup.tp3,
+        riskReward: setup.riskReward,
+        confidence: setup.confidence,
+        confidenceLabel: setup.confidenceLabel,
+        expectedMovePct: setup.expectedMovePct,
+        estHoldingMin: setup.estHoldingMin,
+        reasoning: setup.reasoning,
+        invalidation: setup.invalidation,
+        strategyScores: setup.strategyScores as unknown as object[],
+        source: "COMPOSITE",
+        marketSnapshot: {
+          price: snapshot.price,
+          bias: snapshot.bias,
+          bullishProbability: snapshot.bullishProbability,
+          origin: "scan",
+          quoteVolume: snapshot.quoteVolume ?? null,
+          priceChangePercent: snapshot.priceChangePercent ?? null,
+        },
+      },
+    });
+
+    await dispatchAlert({
+      title: `${setup.side} ${symbol} ${timeframe} — ${setup.confidence}% composite (${setup.confidenceLabel})`,
+      body: [
+        `Entry ${setup.entry} | SL ${setup.stopLoss} | TP1 ${setup.tp1} | TP2 ${setup.tp2} | RR ${setup.riskReward}`,
+        ...setup.reasoning.slice(0, 4).map((r) => `• ${r}`),
+      ].join("\n"),
+      symbol,
+      side: setup.side,
+      confidence: setup.confidence,
+      kind: "signal.opened",
+    });
+
+    logger.info("signals.composite.created", { id: signal.id, symbol, side: setup.side });
+    return signal.id;
+  } catch (err) {
+    logger.error("signals.composite.persist.failed", { symbol, error: String(err) });
+    return null;
+  }
+}
+
+/**
+ * Persist a signal from a qualified institutional footprint.
+ *
+ * Same collection, same lifecycle, same duplicate guard as the other two
+ * sources — only `source: INSTITUTIONAL` distinguishes it. That is what makes
+ * the footprint scanner's record measurable on the same terms as everything
+ * else: successful / partial / failed come from `classifyBucket`, not from a
+ * second scoring rule written specially for this page.
+ *
+ * Returns null unless the setup qualified *and* produced tradable geometry.
+ * A footprint with no trade is still a valid read — the levels stand — but it
+ * is not a signal, and writing one would put an entry price on a conclusion
+ * the engine declined to draw.
+ */
+export async function maybePersistInstitutionalSignal(
+  setup: InstitutionalSetup,
+  extra: { quoteVolume?: number; priceChangePercent?: number } = {}
+): Promise<string | null> {
+  const trade = setup.trade;
+  if (!setup.qualified || !trade) return null;
+
+  const tfMin = TIMEFRAME_MINUTES[setup.timeframe as Timeframe] ?? 60;
+  try {
+    const existing = await prisma.signal.findFirst({
+      where: { symbol: setup.symbol, timeframe: setup.timeframe, status: "ACTIVE" },
+    });
+    if (existing) return null;
+
+    const signal = await prisma.signal.create({
+      data: {
+        symbol: setup.symbol,
+        timeframe: setup.timeframe,
+        side: trade.side,
+        entry: trade.entry,
+        stopLoss: trade.stopLoss,
+        tp1: trade.tp1,
+        tp2: trade.tp2,
+        tp3: trade.tp3,
+        riskReward: trade.riskReward,
+        confidence: setup.score,
+        confidenceLabel: setup.grade === "prime" ? "Very Strong" : "Strong",
+        expectedMovePct: trade.expectedMovePct,
+        // Footprints are positional reads — someone works an order over hours
+        // or days — so they get a wider window than a momentum signal.
+        estHoldingMin: tfMin * 16,
+        reasoning: setup.explanation,
+        invalidation: [
+          `A close ${trade.side === "BUY" ? "below" : "above"} ${trade.stopLoss} says whoever was defending this area has stopped.`,
+          `The read rests on ${setup.zone?.confluence ?? 0} distinct kinds of evidence converging on ${setup.zone ? `${setup.zone.low}–${setup.zone.high}` : "one band"}; if that band trades through, the evidence behind the signal is gone regardless of price action elsewhere.`,
+        ],
+        // Empty by design: no composite strategy produced this, and fabricating
+        // scores here would corrupt the learning engine's weights.
+        strategyScores: [],
+        source: "INSTITUTIONAL",
+        institutional: setup as unknown as object,
+        marketSnapshot: {
+          price: setup.price,
+          side: setup.side,
+          score: setup.score,
+          grade: setup.grade,
+          demandScore: setup.demand.score,
+          supplyScore: setup.supply.score,
+          kinds: setup.evidence.filter((e) => e.found).length,
+          confluence: setup.zone?.confluence ?? 0,
+          rangePosition: setup.range?.position ?? null,
+          openInterestChangePct: setup.openInterestChangePct,
+          // The measured record at signal time, so a review can ask whether
+          // the historical rate was informative — not just what happened.
+          historySamples: setup.history.samples,
+          historyHoldRatePct: setup.history.holdRatePct,
+          quoteVolume: extra.quoteVolume ?? null,
+          priceChangePercent: extra.priceChangePercent ?? null,
+        },
+      },
+    });
+
+    await dispatchAlert({
+      title: `🏛 ${trade.side} ${setup.symbol} ${setup.timeframe} — ${setup.grade} ${setup.side} footprint (${setup.score})`,
+      body: [
+        `Entry ${trade.entry} | SL ${trade.stopLoss} | TP ${trade.tp1} / ${trade.tp2} | RR ${trade.riskReward}`,
+        ...setup.explanation.slice(0, 3).map((r) => `• ${r}`),
+      ].join("\n"),
+      symbol: setup.symbol,
+      side: trade.side,
+      confidence: setup.score,
+      kind: "signal.institutional",
+    });
+
+    logger.info("signals.institutional.created", {
+      id: signal.id,
+      symbol: setup.symbol,
+      side: setup.side,
+      score: setup.score,
+    });
+    return signal.id;
+  } catch (err) {
+    logger.error("signals.institutional.persist.failed", {
+      symbol: setup.symbol,
+      error: String(err),
+    });
     return null;
   }
 }

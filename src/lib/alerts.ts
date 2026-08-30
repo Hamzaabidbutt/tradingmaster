@@ -18,6 +18,8 @@ export type AlertKind =
   | "signal.opened"
   /** a new confluence-scanner signal was opened */
   | "signal.confluence"
+  /** a new institutional-footprint signal was opened */
+  | "signal.institutional"
   /** a signal reached its final target, stopped out or expired */
   | "signal.closed"
   /** forced flow printed at an extreme */

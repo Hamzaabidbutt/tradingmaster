@@ -38,10 +38,17 @@ enum SignalStatus {
 }
 
 /// Which module produced a signal. COMPOSITE is the weighted 28-strategy
-/// ensemble; CONFLUENCE is the three independent chart analysts agreeing.
+/// ensemble; CONFLUENCE is the three independent chart analysts agreeing;
+/// INSTITUTIONAL is the footprint checklist finding several distinct kinds of
+/// evidence converging on one price band.
+///
+/// Kept as one collection on purpose: every source shares the same lifecycle,
+/// the same TP/SL evaluation and the same outcome buckets, so per-source win
+/// rates are a `groupBy` rather than three parallel implementations that drift.
 enum SignalSource {
   COMPOSITE
   CONFLUENCE
+  INSTITUTIONAL
 }
 
 // Every `id` below is a cuid mapped onto Mongo's mandatory `_id` rather than a
@@ -114,6 +121,10 @@ model Signal {
   analystVerdicts  Json?
   /// The full ConfluenceSetup, when source = CONFLUENCE.
   confluence       Json?
+  /// The full InstitutionalSetup, when source = INSTITUTIONAL. Stored so a
+  /// closed signal can be reviewed against the evidence that opened it —
+  /// otherwise the record says a footprint failed without saying which one.
+  institutional    Json?
   /// Machine-readable outcome class, set when the signal closes:
   /// false_breakout | failed_rejection | range_invalidation | ...
   outcomeReason    String?

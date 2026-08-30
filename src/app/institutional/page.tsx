@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
+import SignalRecord from "@/components/dashboard/SignalRecord";
 import { GlassCard, timeAgo } from "@/components/ui/primitives";
 import {
   EmptyNote,
@@ -227,6 +228,22 @@ export default function InstitutionalPage() {
             )}
           </div>
         </GlassCard>
+
+        {/*
+          The record. A scanner that never showed how its calls turned out
+          would be asking to be trusted rather than earning it — and a
+          footprint is exactly the kind of read that is easy to narrate
+          convincingly after the fact.
+        */}
+        <GlassCard title="📒 Institutional footprint signal record">
+          <div className="p-3">
+            <SignalRecord
+              source="INSTITUTIONAL"
+              title="Every footprint signal this scanner has opened"
+              blurb="Qualified footprints with tradable geometry are written as tracked signals and evaluated against price on the same lifecycle as every other source. Successful, partial and failed use the same definitions as Signal History: a partial reached the first target and then reversed — a correct read managed badly, which is worth separating from a wrong one."
+            />
+          </div>
+        </GlassCard>
       </div>
     </AppShell>
   );
@@ -352,6 +369,45 @@ function Row({
             <SideCard read={s.demand} leading={s.demand.score >= s.supply.score} />
             <SideCard read={s.supply} leading={s.supply.score > s.demand.score} />
           </div>
+
+          {s.trade ? (
+            <div className="rounded border border-neon-cyan/25 bg-neon-cyan/[0.05] px-2 py-1.5">
+              <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
+                <span className="text-[9px] uppercase tracking-[0.14em] text-neon-cyan">
+                  Tracked signal
+                </span>
+                <span
+                  className={`font-mono text-[10px] font-bold ${s.trade.side === "BUY" ? "text-bull" : "text-bear"}`}
+                >
+                  {s.trade.side}
+                </span>
+                <span className="font-mono text-[10px] text-slate-400">
+                  RR {s.trade.riskReward}
+                </span>
+                <span className="font-mono text-[10px] text-slate-500">
+                  {s.trade.expectedMovePct >= 0 ? "+" : ""}
+                  {s.trade.expectedMovePct}% to TP2
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px] sm:grid-cols-5">
+                <Cell label="Entry" value={fmtPrice(s.trade.entry)} />
+                <Cell label="Stop" value={fmtPrice(s.trade.stopLoss)} tone="bear" />
+                <Cell label="TP1" value={fmtPrice(s.trade.tp1)} tone="bull" />
+                <Cell label="TP2" value={fmtPrice(s.trade.tp2)} tone="bull" />
+                <Cell label="TP3" value={fmtPrice(s.trade.tp3)} tone="bull" />
+              </div>
+              <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
+                Written to the signal tracker and evaluated against price like any other signal, so
+                this appears in the record below whichever way it goes.
+              </p>
+            </div>
+          ) : (
+            <p className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+              No trade taken from this read. The levels above stand — the geometry between them
+              just does not justify an entry, and putting an entry price on it anyway would be
+              inventing a conclusion the engine declined to draw.
+            </p>
+          )}
 
           <RangeStrip range={s.range} price={s.price} />
           <HistoryBlock history={s.history} side={s.side} />

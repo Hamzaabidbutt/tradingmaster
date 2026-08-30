@@ -510,9 +510,17 @@ export function parseVerdicts(value: unknown): AnalystVerdict[] {
  * `take` is bounded: performance over the last 2000 signals is the useful
  * question, and an unbounded scan would grow slower every week.
  */
-export async function getPerformance(take = 2000): Promise<PerformanceReport> {
+export async function getPerformance(
+  take = 2000,
+  opts: { source?: "COMPOSITE" | "CONFLUENCE" | "INSTITUTIONAL" } = {}
+): Promise<PerformanceReport> {
   try {
     const rows = await prisma.signal.findMany({
+      // A source filter answers "how good is *this* engine", which the blended
+      // number cannot: one source producing ten signals a day drowns out
+      // another producing five a week, and the average is then a statement
+      // about volume rather than quality.
+      where: opts.source ? { source: opts.source } : undefined,
       orderBy: { createdAt: "desc" },
       take,
       select: {

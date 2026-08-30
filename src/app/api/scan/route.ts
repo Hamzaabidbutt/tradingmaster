@@ -13,6 +13,7 @@ import {
 } from "@/services/signalLifecycle";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 /**
  * Universe scan — the data behind 🔥 High Probability Setups.
@@ -23,16 +24,19 @@ export const dynamic = "force-dynamic";
  *  * every symbol the background worker has scanned recently, read from the
  *    database.
  *
- * The split exists because a live sweep of all ~530 perpetuals would blow
- * through Binance's rate limit inside a single page load. The response reports
- * exactly where its coverage came from, so the UI can say "100 scanned live,
- * 430 from the worker" rather than implying it looked at everything itself.
+ * The live pass now covers the whole universe by default — a 400-bar klines
+ * call costs 2 weight, so ~530 symbols is ~1060 against a ~2400/min budget.
+ * The persisted merge is kept because it still earns its place: it fills in
+ * symbols a sweep cut short by the function time limit never reached, and
+ * survives a Binance hiccup mid-scan. The response reports exactly where its
+ * coverage came from rather than implying it looked at everything itself.
  */
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   const tfParam = q.get("timeframe") ?? "1h";
   const timeframe: Timeframe = isValidTimeframe(tfParam) ? tfParam : "1h";
-  const depth = Math.min(250, Math.max(10, Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH)));
+  // 0 = the whole ranked universe, which is now the default.
+  const depth = Math.max(0, Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH));
   const minParam = q.get("min");
   const minConfidence = minParam && !Number.isNaN(Number(minParam)) ? Number(minParam) : undefined;
   const includePersisted = q.get("persisted") !== "false";
