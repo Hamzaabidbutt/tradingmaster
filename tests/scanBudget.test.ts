@@ -87,15 +87,25 @@ describe("scan time budget", () => {
   it("does not abandon work already in flight", async () => {
     // The deadline is checked before starting a symbol, never mid-request:
     // abandoning an in-flight call would waste the Binance weight already spent.
+    //
+    // The budget has to be comfortably longer than dispatch but shorter than
+    // the work. An earlier version used 1ms and was racy — under load the
+    // deadline could pass before all four runners had even pulled an index,
+    // so the assertion was about scheduler speed rather than about abandoning
+    // work. 25ms to dispatch four runners is generous; 60ms of work per item
+    // guarantees every one of them is still in flight when the deadline hits.
     let completed = 0;
-    await mapLimit([1, 2, 3, 4], 4, async (n) => {
-      await sleep(30);
+    const out = await mapLimit([1, 2, 3, 4, 5, 6], 4, async (n) => {
+      await sleep(60);
       completed++;
       return n;
-    }, 1);
-    // All four started before the (immediate) deadline could stop them, and
-    // every one that started was allowed to finish.
+    }, 25);
+
+    // The four that started all ran to completion, well past the deadline.
     expect(completed).toBe(4);
+    // The two that had not started when the budget expired were never begun.
+    expect(out[4]).toBeUndefined();
+    expect(out[5]).toBeUndefined();
   });
 
   it("preserves index alignment so results map back to their symbols", async () => {

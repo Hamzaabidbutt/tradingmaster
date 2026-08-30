@@ -24,6 +24,7 @@ import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleS
 import { buildCandleStory } from "@/engines/candleStory";
 import { findStrongCandles } from "@/engines/strongCandles";
 import CandleInspector from "./CandleInspector";
+import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
 
 interface Props {
   candles: Candle[];
@@ -133,6 +134,15 @@ export default function TradingChart({
   const [badgeY, setBadgeY] = useState<number | null>(null);
   /** Timestamp of the candle under the cursor, if any. */
   const [hoveredTime, setHoveredTime] = useState<number | null>(null);
+  /**
+   * True while the pointer is over one of the inspector's interactive parts.
+   *
+   * A ref rather than state: it is read inside the crosshair handler, which
+   * must not re-subscribe every time the cursor crosses the card's edge.
+   */
+  const overInspectorRef = useRef(false);
+  /** The portalled card's root, for `relatedTarget` containment checks. */
+  const inspectorRootRef = useRef<HTMLElement | null>(null);
   /** Mirrors hoveredTime without re-rendering, so the crosshair handler can
    *  compare cheaply and only call setState when the bar actually changes. */
   const hoveredTimeRef = useRef<number | null>(null);
@@ -278,7 +288,10 @@ export default function TradingChart({
     const chart = chartRef.current;
     if (!ready || !chart) return;
     const onMove = (param: { time?: unknown }) => {
-      const next = param.time == null ? null : Number(param.time);
+      const raw = param.time == null ? null : Number(param.time);
+      // The chart reports "no bar" whenever the pointer sits on the card, so
+      // that answer is only honoured when the pointer is somewhere else.
+      const next = nextHoveredTime(raw, hoveredTimeRef.current, overInspectorRef.current);
       if (next === hoveredTimeRef.current) return;
       hoveredTimeRef.current = next;
       setHoveredTime(next);
@@ -307,8 +320,12 @@ export default function TradingChart({
   useEffect(() => {
     const el = containerRef.current;
     if (!ready || !el) return;
-    const release = () => {
+    const release = (e?: Event) => {
       if (hoveredTimeRef.current === null) return;
+      const related = e instanceof PointerEvent ? (e.relatedTarget as Node | null) : null;
+      // Moving onto the card is not leaving the chart — it is moving onto the
+      // thing showing the reading.
+      if (!shouldReleaseHover(related, inspectorRootRef.current, overInspectorRef.current)) return;
       hoveredTimeRef.current = null;
       setHoveredTime(null);
     };
@@ -1208,6 +1225,10 @@ export default function TradingChart({
           onMove={onInspectorMove}
           minimized={inspectorMinimized}
           onToggleMinimize={onInspectorMinimizeToggle}
+          onPointerOverCard={(over) => {
+            overInspectorRef.current = over;
+          }}
+          rootRef={inspectorRootRef}
         />
       )}
 
