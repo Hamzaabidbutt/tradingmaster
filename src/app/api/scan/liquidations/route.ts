@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   const tfParam = q.get("timeframe") ?? "15m";
   const timeframe: Timeframe = isValidTimeframe(tfParam) ? tfParam : "15m";
-  const depth = Math.min(200, Math.max(10, Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH)));
+  const depth = Math.max(0, Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH));
 
   try {
     return NextResponse.json(await scanLiquidationReversals({ timeframe, depth }));

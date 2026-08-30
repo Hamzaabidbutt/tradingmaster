@@ -580,6 +580,75 @@ describe("detectInstitutional", () => {
     expect(r.explanation.join(" ")).toMatch(/Range: /);
   });
 
+  /* ---- Tradable geometry ---- */
+
+  /**
+   * Open interest is supplied on purpose. Without it the checklist loses a
+   * whole item and nothing in these fixtures clears the qualification bar, so
+   * every geometry assertion below would pass on an empty set — the tests
+   * would be green and would be checking nothing.
+   */
+  const RISING_OI = [100, 110, 125, 140, 160];
+  const GEOMETRY_SEEDS = [3, 11, 29, 47, 61, 2, 13, 37, 5, 23];
+
+  it("reaches the qualified-with-trade state on at least one fixture", () => {
+    const reads = GEOMETRY_SEEDS.map((seed) =>
+      detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, seed, 100), RISING_OI)
+    );
+    expect(reads.some((r) => r.qualified && r.trade !== null)).toBe(true);
+    // And the withheld-trade branch, so "no trade" is not merely what happens
+    // when nothing ever qualifies.
+    expect(reads.some((r) => r.qualified && r.trade === null)).toBe(true);
+  });
+
+  it("only offers a trade on a qualified read", () => {
+    for (const seed of GEOMETRY_SEEDS) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, seed, 100), RISING_OI);
+      // An unqualified footprint is still a valid set of levels. Attaching an
+      // entry price to it would put a number on a conclusion the engine
+      // explicitly declined to draw.
+      if (!r.qualified) expect(r.trade).toBeNull();
+    }
+  });
+
+  it("points the trade the same way as the read, with the stop past invalidation", () => {
+    let checked = 0;
+    for (const seed of GEOMETRY_SEEDS) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, seed, 100), RISING_OI);
+      if (!r.trade) continue;
+      checked++;
+      const t = r.trade;
+      expect(t.side).toBe(r.side === "accumulation" ? "BUY" : "SELL");
+      if (t.side === "BUY") {
+        // Stop strictly beyond invalidation, never on it: a stop resting
+        // exactly on the zone edge is taken by the wick that tests the area —
+        // the move the read expects, not the one that refutes it.
+        expect(t.stopLoss).toBeLessThan(r.invalidateLevel!);
+        expect(t.tp1).toBeGreaterThan(t.entry);
+        expect(t.tp2).toBeGreaterThan(t.entry);
+        expect(t.tp3).toBeGreaterThan(t.tp2);
+      } else {
+        expect(t.stopLoss).toBeGreaterThan(r.invalidateLevel!);
+        expect(t.tp1).toBeLessThan(t.entry);
+        expect(t.tp2).toBeLessThan(t.entry);
+        expect(t.tp3).toBeLessThan(t.tp2);
+      }
+      expect(t.riskReward).toBeGreaterThanOrEqual(1);
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("withholds the trade when the geometry is worse than 1R", () => {
+    for (const seed of GEOMETRY_SEEDS) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(240, seed, 100), RISING_OI);
+      if (r.qualified && r.trade === null) {
+        // The levels must still be reported — only the trade is withheld.
+        expect(r.zone).not.toBeNull();
+        expect(r.invalidateLevel).not.toBeNull();
+      }
+    }
+  });
+
   it("survives arbitrary series without throwing or emitting bad numbers", () => {
     for (const seed of [1, 8, 19, 26, 44, 53]) {
       const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(160, seed, 50));

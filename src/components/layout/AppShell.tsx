@@ -10,6 +10,7 @@ import { MARKETS } from "@/lib/config";
 const NAV = [
   { href: "/", label: "Dashboard", icon: "🔥" },
   { href: "/terminal", label: "Terminal", icon: "◉" },
+  { href: "/composite", label: "Composite", icon: "🧮" },
   { href: "/reversals", label: "Zone Reversals", icon: "🧱" },
   { href: "/liquidations", label: "Liquidation Spikes", icon: "💥" },
   { href: "/institutional", label: "Institutional", icon: "🏛" },
@@ -25,6 +26,7 @@ const NAV = [
 const SHORT_LABEL: Record<string, string> = {
   "/": "Setups",
   "/reversals": "Zones",
+  "/composite": "Comp",
   "/liquidations": "Liqs",
   "/institutional": "Inst",
   "/engulfing": "Engulf",

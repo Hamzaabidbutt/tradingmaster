@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isValidTimeframe, Timeframe } from "@/lib/config";
-import { scanEngulfing } from "@/services/scanService";
+import { DEFAULT_SCAN_DEPTH, scanEngulfing } from "@/services/scanService";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   const tfParam = q.get("timeframe") ?? "4h";
   const timeframe: Timeframe = isValidTimeframe(tfParam) ? tfParam : "4h";
-  const depth = Math.min(150, Math.max(10, Number(q.get("depth") ?? 80)));
+  const depth = Math.max(0, Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH));
 
   try {
     return NextResponse.json(await scanEngulfing({ timeframe, depth }));

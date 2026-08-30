@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isValidTimeframe, Timeframe } from "@/lib/config";
-import { scanCascadeRisk } from "@/services/scanService";
+import { DEFAULT_SCAN_DEPTH, scanCascadeRisk } from "@/services/scanService";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   const tfParam = q.get("timeframe") ?? "15m";
   const timeframe: Timeframe = isValidTimeframe(tfParam) ? tfParam : "15m";
-  const depth = Math.min(120, Math.max(10, Number(q.get("depth") ?? 60)));
+  const depth = Math.max(0, Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH));
 
   try {
     return NextResponse.json(await scanCascadeRisk({ timeframe, depth }));

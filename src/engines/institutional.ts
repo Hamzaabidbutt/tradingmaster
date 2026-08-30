@@ -745,6 +745,7 @@ export function detectInstitutional(
     confirmLevel: null,
     invalidateLevel: null,
     objective: null,
+    trade: null,
     headline: "No institutional footprint in range",
     explanation: ["Nothing in this window suggests size was being worked at a level."],
   };
@@ -848,6 +849,40 @@ export function detectInstitutional(
         .sort((a, b) => b.price - a.price)[0]?.price ??
       null);
 
+  /* ---- Tradable geometry, only for a qualified read ----
+     Built from the levels above rather than alongside them, so the trade can
+     never disagree with the explanation. The stop sits a tenth of the zone's
+     own width beyond the invalidation level: placing it exactly on the edge
+     gets it taken by the wick that tests the area, which is the move the read
+     expects rather than the one that refutes it. */
+  let trade: InstitutionalSetup["trade"] = null;
+  if (qualified && zone && invalidateLevel != null && confirmLevel != null) {
+    const entry = buy ? zone.high : zone.low;
+    const buffer = Math.max((zone.high - zone.low) * 0.1, entry * 0.0005);
+    const stopLoss = buy ? invalidateLevel - buffer : invalidateLevel + buffer;
+    const risk = Math.abs(entry - stopLoss);
+    const tp1 = confirmLevel;
+    // Objective when there is one; otherwise 2R, labelled as geometry in the
+    // explanation rather than presented as a mapped level.
+    const tp2 = objective ?? (buy ? entry + risk * 2 : entry - risk * 2);
+    const tp3 = buy ? entry + (tp2 - entry) * 1.5 : entry - (entry - tp2) * 1.5;
+    const reward = Math.abs(tp2 - entry);
+    // A setup whose first target sits inside its own risk is not a setup. The
+    // levels still stand and are still reported — only the trade is withheld.
+    if (risk > 0 && (buy ? tp1 > entry : tp1 < entry) && reward / risk >= 1) {
+      trade = {
+        side: buy ? "BUY" : "SELL",
+        entry,
+        stopLoss,
+        tp1,
+        tp2,
+        tp3,
+        riskReward: Number((reward / risk).toFixed(2)),
+        expectedMovePct: Number((((tp2 - entry) / entry) * 100).toFixed(2)),
+      };
+    }
+  }
+
   const sideWord = buy ? "accumulation" : "distribution";
   const headline = qualified
     ? `${grade === "prime" ? "Prime" : "Strong"} ${sideWord} footprint — ${zone!.confluence} kinds of evidence at ${fmt(zone!.mid)}`
@@ -871,6 +906,11 @@ export function detectInstitutional(
       : `No balance area: structure reads ${structure.trend}, so the checklist is located against price alone. Range position scores nothing rather than inventing a boundary out of a trend.`,
     history.note,
   ];
+  if (trade) {
+    explanation.push(
+      `Trade geometry: ${trade.side} at ${fmt(trade.entry)}, stop ${fmt(trade.stopLoss)} (a fraction of the zone's width beyond invalidation, so the wick that tests the area does not take it), first target ${fmt(trade.tp1)}${objective != null ? `, second ${fmt(trade.tp2)} at the next mapped level` : `, second ${fmt(trade.tp2)} which is 2R geometry rather than a mapped level`}. Risk-reward ${trade.riskReward}. These follow from the levels above; they are not a separate opinion about where price will go.`
+    );
+  }
   for (const e of lead.evidence) if (e.found) explanation.push(`✓ ${e.label}: ${e.detail}`);
   for (const e of lead.evidence) if (!e.found) explanation.push(`✗ ${e.label}: ${e.detail}`);
   if (zone) {
@@ -898,6 +938,7 @@ export function detectInstitutional(
     confirmLevel,
     invalidateLevel,
     objective,
+    trade,
     headline,
     explanation,
   };

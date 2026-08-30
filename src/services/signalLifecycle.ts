@@ -1,6 +1,11 @@
 import { logger } from "@/lib/logger";
-import { ScanEntry } from "./scanService";
-import { evaluateOpenSignals, maybePersistConfluenceSignal } from "./signalService";
+import { CompositeEntry, InstitutionalEntry, ScanEntry } from "./scanService";
+import {
+  evaluateOpenSignals,
+  maybePersistCompositeSignal,
+  maybePersistConfluenceSignal,
+  maybePersistInstitutionalSignal,
+} from "./signalService";
 
 /**
  * Serverless-safe signal lifecycle.
@@ -127,5 +132,102 @@ export async function persistScanSignals(
 export function persistScanSignalsInBackground(entries: ScanEntry[]): void {
   persistScanSignals(entries).catch((err) =>
     logger.warn("lifecycle.persist.background.failed", { error: String(err) })
+  );
+}
+
+/**
+ * Persist qualifying institutional footprints as tracked signals.
+ *
+ * Deliberately tighter than the confluence path. A footprint is a positional
+ * read that can sit unresolved for days, so opening many at once would fill
+ * the tracker with correlated positions and make the resulting hit rate a
+ * measurement of one market move rather than of the engine. Only the strongest
+ * few per sweep are written.
+ *
+ * Entries with no `trade` are skipped inside the persist call: the read can be
+ * valid — the levels stand — while the geometry does not justify an entry, and
+ * writing one anyway would put a price on a conclusion the engine declined.
+ */
+export async function persistInstitutionalSignals(
+  entries: InstitutionalEntry[],
+  opts: { limit?: number } = {}
+): Promise<{ created: number; considered: number }> {
+  const limit = opts.limit ?? 5;
+  const candidates = entries
+    .filter((e) => e.setup.qualified && e.setup.trade !== null)
+    .sort((a, b) => b.setup.score - a.setup.score)
+    .slice(0, limit);
+
+  let created = 0;
+  for (const entry of candidates) {
+    try {
+      const id = await maybePersistInstitutionalSignal(entry.setup, {
+        quoteVolume: entry.quoteVolume,
+        priceChangePercent: entry.priceChangePercent ?? undefined,
+      });
+      if (id) created++;
+    } catch (err) {
+      logger.warn("lifecycle.institutional.persist.failed", {
+        symbol: entry.symbol,
+        error: String(err),
+      });
+    }
+  }
+
+  if (created > 0) logger.info("lifecycle.institutional.persisted", { created });
+  return { created, considered: candidates.length };
+}
+
+export function persistInstitutionalSignalsInBackground(entries: InstitutionalEntry[]): void {
+  persistInstitutionalSignals(entries).catch((err) =>
+    logger.warn("lifecycle.institutional.background.failed", { error: String(err) })
+  );
+}
+
+/**
+ * Persist qualifying composite setups as tracked signals.
+ *
+ * The composite always has an opinion, so the confidence floor matters more
+ * here than on the confluence path — without it every sweep would open dozens
+ * of marginal positions and the source's win rate would measure the threshold
+ * rather than the engine.
+ */
+export async function persistCompositeSignals(
+  entries: CompositeEntry[],
+  opts: { minConfidence?: number; limit?: number } = {}
+): Promise<{ created: number; considered: number }> {
+  const min = opts.minConfidence ?? PERSIST_MIN_CONFIDENCE;
+  const limit = opts.limit ?? 8;
+  const candidates = entries
+    .filter((e) => e.setup !== null && e.setup.confidence >= min)
+    .sort((a, b) => (b.setup?.confidence ?? 0) - (a.setup?.confidence ?? 0))
+    .slice(0, limit);
+
+  let created = 0;
+  for (const entry of candidates) {
+    try {
+      const id = await maybePersistCompositeSignal(entry.symbol, entry.timeframe, entry.setup!, {
+        price: entry.price,
+        bias: entry.bias,
+        bullishProbability: entry.bullishProbability,
+        quoteVolume: entry.quoteVolume,
+        priceChangePercent: entry.priceChangePercent ?? undefined,
+      });
+      if (id) created++;
+    } catch (err) {
+      logger.warn("lifecycle.composite.persist.failed", {
+        symbol: entry.symbol,
+        error: String(err),
+      });
+    }
+  }
+
+  if (created > 0) logger.info("lifecycle.composite.persisted", { created });
+  return { created, considered: candidates.length };
+}
+
+export function persistCompositeSignalsInBackground(entries: CompositeEntry[]): void {
+  persistCompositeSignals(entries).catch((err) =>
+    logger.warn("lifecycle.composite.background.failed", { error: String(err) })
   );
 }

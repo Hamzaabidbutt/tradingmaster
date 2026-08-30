@@ -174,9 +174,20 @@ function Terminal() {
 
   return (
     <AppShell>
-      <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
+      {/*
+        `minmax(0,1fr)` rather than `1fr`, and `min-w-0` on the cells.
+
+        A grid item defaults to `min-width: auto`, which resolves to its
+        content's min-content width — so a bare `1fr` track cannot shrink below
+        whatever its widest child wants. The event tape, the timeframe row and
+        the wall strip are all long horizontal rows; any one of them pushed the
+        chart column past the viewport and shoved the 360px AI rail off the
+        right edge. Their own `overflow-x-auto` does not help, because the
+        blow-out happens on the track, not inside them.
+      */}
+      <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         {/* Chart cell */}
-        <div className="glass flex h-[620px] flex-col p-3">
+        <div className="glass flex h-[620px] min-w-0 flex-col p-3">
           {/* Above the coin name: what the tape has done recently, with times. */}
           <EventTape analysis={analysis} />
           <MarketSelector connected={connected} price={price} countdown={formatted} />
@@ -219,7 +230,7 @@ function Terminal() {
         </div>
 
         {/* AI analyst — right rail, spans both rows on desktop */}
-        <div className="h-[620px]">
+        <div className="h-[620px] min-w-0">
           <AIInsightPanel analysis={analysis} />
         </div>
 
@@ -251,7 +262,7 @@ function Terminal() {
       {/* Independent analysts. These three read the chart on their own terms
           and never feed the composite signal above — they are deliberately a
           separate opinion, not another input to it. */}
-      <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 md:grid-cols-2 2xl:grid-cols-3">
         <div className="h-[600px]"><ChartAnalystPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
         <div className="h-[600px]"><CandleCloseExpansionPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
         <div className="h-[600px]"><RangeTradingPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
@@ -261,14 +272,14 @@ function Terminal() {
           the footprint below, since the footprint is the evidence and the
           order-flow read is the conclusion drawn from it — reading them in
           that order costs nothing and saves scrolling back up. */}
-      <div className="grid grid-cols-1 gap-3 p-3 pt-0 md:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 md:grid-cols-2 2xl:grid-cols-3">
         <div className="h-[560px]"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
         <div className="h-[560px]"><StructurePanel analysis={analysis} /></div>
         <div className="h-[560px]"><WhaleOrdersPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
       </div>
 
       {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
-      <div className="grid grid-cols-1 gap-3 p-3 pt-0 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 lg:grid-cols-3">
         <div className="hidden h-[600px] xl:block"><FootprintPanel analysis={analysis} /></div>
         <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
         <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>

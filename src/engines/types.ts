@@ -1536,6 +1536,26 @@ export interface InstitutionalSetup {
   invalidateLevel: number | null;
   /** the next mapped level in the implied direction */
   objective: number | null;
+  /**
+   * Tradable geometry, present only when the read qualifies.
+   *
+   * Derived from the levels above rather than invented alongside them: entry
+   * at the zone edge, stop beyond the level whose breach refutes the read,
+   * targets at confirmation and objective. Null when nothing qualified, so a
+   * caller cannot accidentally trade an unqualified footprint.
+   */
+  trade: InstitutionalTrade | null;
   headline: string;
   explanation: string[];
+}
+
+export interface InstitutionalTrade {
+  side: "BUY" | "SELL";
+  entry: number;
+  stopLoss: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  riskReward: number;
+  expectedMovePct: number;
 }
