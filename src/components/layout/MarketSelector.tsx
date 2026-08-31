@@ -42,7 +42,7 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
         key: "openInterest",
         label: "Open Interest",
         title:
-          "Open-interest line — violet as positions build, grey as they unwind. Delta says who was aggressive; this says whether that aggression opened or closed positions.",
+          "Open-interest line. Delta says who was aggressive; this says whether that aggression opened positions or closed them.",
       },
       { key: "orderFlowEvents", label: "ABS", title: "Absorption, exhaustion & trapped-trader markers" },
       { key: "bigTrades", label: "BIG", title: "Large-order bubbles" },
