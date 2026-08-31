@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
+import { useOpenInterest } from "@/hooks/useOpenInterest";
 import MarketSelector from "@/components/layout/MarketSelector";
 import AIInsightPanel from "@/components/panels/AIInsightPanel";
 import SignalPanel from "@/components/panels/SignalPanel";
@@ -97,6 +98,7 @@ function Terminal() {
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
   // The book is only polled while at least one wall overlay is on.
+  const { openInterest } = useOpenInterest(symbol, timeframe, overlays.openInterest);
   const { walls, error: wallError } = useOrderWalls(
     symbol,
     overlays.buyWalls || overlays.sellWalls
@@ -225,6 +227,7 @@ function Terminal() {
               onInspectorMove={setInspectorPos}
               inspectorMinimized={inspectorMinimized}
               onInspectorMinimizeToggle={toggleInspectorMinimized}
+              openInterest={openInterest}
             />
           </div>
         </div>

@@ -29,6 +29,19 @@ export interface SplitCvd {
   down: SeriesPoint[];
 }
 
+/**
+ * The same split for any `{ time, value }` series.
+ *
+ * Open interest wants identical treatment — one colour while it builds, another
+ * while it unwinds — and the transition-point subtlety above is a property of
+ * two-tone lines in lightweight-charts, not of cumulative delta. Sharing the
+ * implementation is what keeps the two lines behaving the same way at their
+ * joins.
+ */
+export function splitSeriesByDirection(series: { time: number; value: number }[]): SplitCvd {
+  return splitCvdByDirection(series.map((p) => ({ time: p.time, cvd: p.value })));
+}
+
 export function splitCvdByDirection(series: CvdInput[]): SplitCvd {
   const up: SeriesPoint[] = [];
   const down: SeriesPoint[] = [];

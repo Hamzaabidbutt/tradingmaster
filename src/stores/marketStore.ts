@@ -41,6 +41,8 @@ export interface OverlayToggles {
   /** big-trade "bubbles" */
   bigTrades: boolean;
   cvd: boolean;
+  /** open-interest line, two-tone like the CVD line */
+  openInterest: boolean;
 }
 
 /** Where the candle inspector has been dragged to, in px from the chart's top-left. */
@@ -110,6 +112,9 @@ export const useMarketStore = create<MarketState>()(
         orderFlowEvents: true,
         bigTrades: true,
         cvd: false,
+        // Off by default alongside the order-book overlays: it opens a polling
+        // loop, and a chart should not start one nobody asked for.
+        openInterest: false,
       },
       sidebarCollapsed: false,
       // An hour of 1m candles reads market sentiment far more steadily than

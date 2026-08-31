@@ -252,9 +252,18 @@ export async function fetchFundingRateHist(
   }
 }
 
+/**
+ * The periods Binance actually publishes open interest on.
+ *
+ * Not the same list as the chart's timeframes — there is no 1m, 8h or weekly
+ * series — so callers map onto this rather than passing an interval through
+ * and getting an empty array back.
+ */
+export type OpenInterestPeriod = "5m" | "15m" | "30m" | "1h" | "2h" | "4h" | "6h" | "12h" | "1d";
+
 export async function fetchOpenInterestHist(
   symbol: string,
-  period: "5m" | "15m" | "30m" | "1h" | "4h" | "1d" = "5m",
+  period: OpenInterestPeriod = "5m",
   limit = 48
 ): Promise<OpenInterestPoint[]> {
   const cacheKey = `oi:${symbol}:${period}:${limit}`;

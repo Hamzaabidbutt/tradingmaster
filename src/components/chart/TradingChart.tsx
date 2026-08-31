@@ -19,7 +19,8 @@ import { Candle, FullAnalysis, OrderWallResult } from "@/engines/types";
 import { InspectorPosition, OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
-import { splitCvdByDirection } from "./cvdSeries";
+import { splitCvdByDirection, splitSeriesByDirection } from "./cvdSeries";
+import type { OpenInterestPoint } from "@/lib/binance";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
 import { buildCandleStory } from "@/engines/candleStory";
 import { findStrongCandles } from "@/engines/strongCandles";
@@ -45,6 +46,8 @@ interface Props {
   /** inspector collapsed to its header strip */
   inspectorMinimized?: boolean;
   onInspectorMinimizeToggle?: () => void;
+  /** open-interest history for the overlay; empty when it is off or unavailable */
+  openInterest?: OpenInterestPoint[];
 }
 
 const BULL = "#00e5a0";
@@ -52,6 +55,10 @@ const BEAR = "#ff4d6d";
 /** Cumulative delta: blue while it rises, white while it falls. */
 const CVD_UP = "#3b82f6";
 const CVD_DOWN = "#e2e8f0";
+/* Open interest: violet while positions build, grey while they unwind. Chosen
+   to sit apart from the CVD blue so the two lines never read as one. */
+const OI_UP = "#a78bfa";
+const OI_DOWN = "#64748b";
 /**
  * Bars carrying outsized volume with one-sided delta and/or forced flow.
  * Yellow rather than a brighter green/red, so "this bar mattered" reads as a
@@ -87,6 +94,7 @@ export default function TradingChart({
   onInspectorMove,
   inspectorMinimized,
   onInspectorMinimizeToggle,
+  openInterest = [],
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -101,6 +109,8 @@ export default function TradingChart({
    */
   const cvdUpSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const cvdDownSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiUpSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const oiDownSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   /**
@@ -235,6 +245,8 @@ export default function TradingChart({
       vwapSeriesRef.current = null;
       cvdUpSeriesRef.current = null;
       cvdDownSeriesRef.current = null;
+      oiUpSeriesRef.current = null;
+      oiDownSeriesRef.current = null;
       liqCumSeriesRef.current = null;
       priceLinesRef.current = [];
       loadedKeyRef.current = null;
@@ -614,6 +626,60 @@ export default function TradingChart({
       /* disposed between the guard and the call */
     }
   }, [ready, analysis, overlays.cvd]);
+
+  // --- Open interest (own scale, violet as positions build, grey as they close)
+  //
+  // Deliberately built the same way as the CVD line above, including the
+  // two-tone split, because it answers the companion question: cumulative
+  // delta says who was aggressive, open interest says whether that aggression
+  // opened positions or closed them. The same bar with rising OI and falling
+  // OI means opposite things, and reading them on one scale is what makes the
+  // comparison possible.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!ready || !chart || disposedRef.current) return;
+    if (!overlays.openInterest || openInterest.length === 0) {
+      for (const ref of [oiUpSeriesRef, oiDownSeriesRef]) {
+        if (ref.current) {
+          try { chart.removeSeries(ref.current); } catch { /* disposed */ }
+          ref.current = null;
+        }
+      }
+      return;
+    }
+    const makeSeries = (color: string) =>
+      chart.addLineSeries({
+        color,
+        lineWidth: 2,
+        priceScaleId: "oi",
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+    if (!oiUpSeriesRef.current) {
+      oiUpSeriesRef.current = makeSeries(OI_UP);
+      // Its own band, below the CVD one, so neither line is read against the
+      // other's scale.
+      chart.priceScale("oi").applyOptions({ scaleMargins: { top: 0.2, bottom: 0.6 } });
+    }
+    if (!oiDownSeriesRef.current) oiDownSeriesRef.current = makeSeries(OI_DOWN);
+
+    const { up, down } = splitSeriesByDirection(
+      openInterest.map((p) => ({ time: p.time, value: p.openInterest }))
+    );
+    const toSeries = (points: ReturnType<typeof splitSeriesByDirection>["up"]) =>
+      points.map((p) =>
+        "value" in p
+          ? { time: p.time as UTCTimestamp, value: p.value }
+          : { time: p.time as UTCTimestamp }
+      );
+    try {
+      oiUpSeriesRef.current.setData(toSeries(up));
+      oiDownSeriesRef.current.setData(toSeries(down));
+    } catch {
+      /* disposed between the guard and the call */
+    }
+  }, [ready, openInterest, overlays.openInterest]);
 
   // --- Aggregate liquidation delta, cumulative (forced-flow balance) ---
   useEffect(() => {

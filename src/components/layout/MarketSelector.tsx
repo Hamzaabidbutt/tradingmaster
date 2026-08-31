@@ -38,6 +38,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "liquidationCumulative", label: "ΣLIQΔ", title: "Cumulative aggregate liquidation delta — running forced-flow balance" },
       { key: "pressure", label: "BUY%", title: "Buy-vs-sell pressure ribbon per bar" },
       { key: "cvd", label: "CVD", title: "Cumulative volume delta line" },
+      {
+        key: "openInterest",
+        label: "Open Interest",
+        title:
+          "Open-interest line — violet as positions build, grey as they unwind. Delta says who was aggressive; this says whether that aggression opened or closed positions.",
+      },
       { key: "orderFlowEvents", label: "ABS", title: "Absorption, exhaustion & trapped-trader markers" },
       { key: "bigTrades", label: "BIG", title: "Large-order bubbles" },
       { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
