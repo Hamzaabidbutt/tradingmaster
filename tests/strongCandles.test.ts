@@ -36,10 +36,40 @@ describe("strong candles", () => {
     expect(found.get(SPECIAL)).toBeUndefined();
   });
 
-  it("ignores outsized volume that was evenly two-sided", () => {
-    // 5x volume, but delta near zero and no forced flow: a busy, balanced bar.
+  it("marks three times average volume on its own, however balanced", () => {
+    // 5x volume, delta near zero, no forced flow. This used to be hidden,
+    // because balanced delta failed the one-sided test — so the single most
+    // visible thing on the chart went unmarked. Heavy two-way trade at one
+    // price is what absorption looks like; it earns the highlight by size.
     const found = findStrongCandles(series({ volume: 5000, takerBuyVolume: 2500 }));
-    expect(found.get(SPECIAL)).toBeUndefined();
+    const mark = found.get(SPECIAL);
+    expect(mark).toBeDefined();
+    expect(mark!.volumeMultiple).toBeGreaterThanOrEqual(3);
+    expect(mark!.reasons[0]).toMatch(/× average volume/);
+  });
+
+  it("marks exactly three times average volume, not just above it", () => {
+    // Boundary: the rule is "at least 3x", so 3.0 itself must qualify.
+    const found = findStrongCandles(series({ volume: 3000, takerBuyVolume: 1500 }));
+    expect(found.get(SPECIAL)?.volumeMultiple).toBe(3);
+  });
+
+  it("still requires corroboration between two and three times average", () => {
+    // 2.5x on balanced delta with no forced flow is common enough to be noise;
+    // marking it would put yellow on a third of the chart.
+    const quiet = findStrongCandles(series({ volume: 2500, takerBuyVolume: 1250 }));
+    expect(quiet.get(SPECIAL)).toBeUndefined();
+
+    // The same size with one-sided delta does qualify.
+    const oneSided = findStrongCandles(series({ volume: 2500, takerBuyVolume: 2100 }));
+    expect(oneSided.get(SPECIAL)).toBeDefined();
+
+    // And so does the same size with forced flow behind it.
+    const forced = findStrongCandles(
+      series({ volume: 2500, takerBuyVolume: 1250 }),
+      forcedOn(SPECIAL, 700)
+    );
+    expect(forced.get(SPECIAL)).toBeDefined();
   });
 
   it("marks outsized volume with one-sided delta as strong", () => {
