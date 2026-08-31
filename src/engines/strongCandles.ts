@@ -8,22 +8,36 @@ import { Candle, LiquidationDeltaPoint } from "./types";
  * them on the chart means you find them by looking rather than by scrolling a
  * panel and matching timestamps back to bars.
  *
- * ## Why two tiers rather than one
+ * ## How a bar qualifies
  *
- * Requiring all three conditions at once produces a highlight so rare that the
+ * Requiring all three conditions at once produces a highlight so rare the
  * feature looks broken; requiring any one produces a chart of yellow candles,
- * which is the same as no highlight at all. So volume is mandatory — nothing
- * is a "strong" bar on thin trade — and the other two decide the tier:
+ * which is the same as no highlight at all. So there are two routes in, and
+ * both are about volume:
  *
- *   `strong`  outsized volume plus **one** of one-sided delta or forced flow
- *   `extreme` outsized volume plus **both**
+ *   * **Volume alone**, at `VOLUME_ALONE_X` or more. Three times the local
+ *     average is a large enough event to be worth seeing on its own terms.
+ *     Delta can be balanced and no margin engine need be involved — heavy
+ *     two-way trade at one price is exactly what absorption looks like, and
+ *     the previous rule hid it, because balanced delta failed the one-sided
+ *     test and a 5x volume bar went unmarked.
+ *   * **Volume plus corroboration**, from `VOLUME_X` up. Between two and three
+ *     times, volume alone is common enough to be noise, so it needs either
+ *     one-sided delta or forced flow behind it.
+ *
+ * The tier is a separate question from qualifying:
+ *
+ *   `strong`  qualified, but not both of one-sided delta and forced flow
+ *   `extreme` outsized volume with **both**
  *
  * The thresholds are relative to the surrounding bars, not absolute, so the
  * same rule works on BTC and on a small cap.
  */
 
-/** Volume multiple of the local average below which nothing qualifies. */
+/** Volume multiple below which nothing qualifies, even with corroboration. */
 const VOLUME_X = 2;
+/** Volume multiple at which the bar is worth marking on its own. */
+const VOLUME_ALONE_X = 3;
 /** Share of a bar's volume that must be net one-way for delta to count. */
 const DELTA_SHARE = 0.35;
 /** Bars either side used to judge what "average" means here. */
@@ -82,9 +96,15 @@ export function findStrongCandles(
 
     const oneSided = Math.abs(deltaShare) >= DELTA_SHARE;
     const hasForced = forced > 0;
-    if (!oneSided && !hasForced) continue;
+    // Three times the local average stands on its own; below that the bar has
+    // to bring something else with it.
+    const volumeAlone = volumeMultiple >= VOLUME_ALONE_X;
+    if (!volumeAlone && !oneSided && !hasForced) continue;
 
     const reasons = [`${volumeMultiple.toFixed(1)}× average volume`];
+    if (volumeAlone && !oneSided && !hasForced) {
+      reasons.push("heavy two-way trade — balanced delta at this size is what absorption looks like");
+    }
     if (oneSided) {
       reasons.push(
         `${(Math.abs(deltaShare) * 100).toFixed(0)}% net ${deltaShare > 0 ? "buying" : "selling"}`

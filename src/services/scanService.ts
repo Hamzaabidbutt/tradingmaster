@@ -19,6 +19,7 @@ import { detectLiquidationReversal } from "@/engines/liquidationReversal";
 import { detectCascadeRisk } from "@/engines/cascadeRisk";
 import { detectBullishEngulfing } from "@/engines/engulfing";
 import { detectInstitutional } from "@/engines/institutional";
+import { detectRecovery } from "@/engines/recovery";
 import { analyzeMarket } from "@/engines/analyzer";
 import { evaluateStrategies } from "@/engines/strategies";
 import { getStrategyWeights } from "./signalService";
@@ -30,6 +31,7 @@ import {
   InstitutionalSetup,
   ConfluenceSetup,
   LiquidationReversalSetup,
+  RecoverySetup,
   TradeSetup,
   ZoneReversalSetup,
 } from "@/engines/types";
@@ -877,6 +879,103 @@ export async function scanComposite(opts: {
       .sort((a, b) => Math.abs(b.bullishProbability - 50) - Math.abs(a.bullishProbability - 50))
       .slice(0, 20),
     scanned: entries.length,
+    failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Deep-drawdown recovery sweep
+ * ------------------------------------------------------------------ */
+
+export interface RecoveryEntry {
+  symbol: string;
+  label: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  setup: RecoverySetup;
+}
+
+export interface RecoveryScan {
+  /** deep, based, and enough accumulation signs to clear the bar */
+  candidates: RecoveryEntry[];
+  /** deep and based, but the evidence has not arrived */
+  watching: RecoveryEntry[];
+  /** deep but with no base — falling knives, listed so they are not mistaken
+      for the list above */
+  falling: RecoveryEntry[];
+  scanned: number;
+  eligible: number;
+  failed: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep the universe for deep drawdowns that are being accumulated.
+ *
+ * Always daily, regardless of any chart timeframe: a base takes months to
+ * form, and asking this question on 15-minute candles would be asking a
+ * different question entirely.
+ *
+ * `RECOVERY_BARS` is 1000 daily candles — under Binance's 1500 single-call
+ * cap, so one request per symbol, and about four years, which is as far back
+ * as most perpetuals go anyway. Weight is 5 at this limit rather than 2, so a
+ * full-universe pass costs ~2650 against the ~2400/min budget: this sweep runs
+ * at reduced depth by default for that reason, and it is the one place in this
+ * file where the rate limit genuinely binds.
+ */
+const RECOVERY_BARS = 1000;
+const RECOVERY_DEFAULT_DEPTH = 200;
+
+export async function scanRecovery(opts: {
+  depth?: number;
+  concurrency?: number;
+}): Promise<RecoveryScan> {
+  const ranked = takeDepth(await rankUniverse(), opts.depth ?? RECOVERY_DEFAULT_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const [candles, oi] = await Promise.all([
+      fetchKlines(r.symbol, "1d", RECOVERY_BARS),
+      fetchOpenInterestHist(r.symbol, "1d", 30).catch(() => []),
+    ]);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectRecovery(
+        r.symbol,
+        candles,
+        oi.length > 0 ? oi.map((p) => p.openInterest) : null
+      ),
+    } satisfies RecoveryEntry;
+  });
+
+  const entries: RecoveryEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    if (!res) continue;
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const eligible = entries.filter((e) => e.setup.eligible);
+  const byScore = (a: RecoveryEntry, b: RecoveryEntry) => b.setup.score - a.setup.score;
+  const based = eligible.filter((e) => e.setup.baseDays >= 30);
+
+  return {
+    candidates: based.filter((e) => e.setup.qualified).sort(byScore),
+    watching: based.filter((e) => !e.setup.qualified).sort(byScore).slice(0, 20),
+    // Shown deliberately. The list above is what the scanner is for; this one
+    // is what it is protecting you from, and hiding it would let a coin move
+    // silently between the two.
+    falling: eligible
+      .filter((e) => e.setup.baseDays < 30)
+      .sort((a, b) => b.setup.drawdownPct - a.setup.drawdownPct)
+      .slice(0, 10),
+    scanned: entries.length,
+    eligible: eligible.length,
     failed,
     scannedAt: Math.floor(Date.now() / 1000),
   };

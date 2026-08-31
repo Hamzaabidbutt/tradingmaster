@@ -15,6 +15,7 @@ const NAV = [
   { href: "/liquidations", label: "Liquidation Spikes", icon: "💥" },
   { href: "/institutional", label: "Institutional", icon: "🏛" },
   { href: "/engulfing", label: "Engulfing 4h", icon: "🟩" },
+  { href: "/recovery", label: "Recovery", icon: "🌱" },
   { href: "/signals", label: "Signal History", icon: "⚡" },
   { href: "/strategies", label: "Strategies", icon: "🧠" },
   { href: "/backtest", label: "Backtest", icon: "⏱" },
@@ -30,6 +31,7 @@ const SHORT_LABEL: Record<string, string> = {
   "/liquidations": "Liqs",
   "/institutional": "Inst",
   "/engulfing": "Engulf",
+  "/recovery": "Recov",
   "/signals": "History",
   "/strategies": "Strats",
 };

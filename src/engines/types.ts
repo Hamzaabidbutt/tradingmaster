@@ -1585,3 +1585,72 @@ export interface InstitutionalTrade {
   riskReward: number;
   expectedMovePct: number;
 }
+
+/* ------------------------------------------------------------------ *
+ * Deep-drawdown recovery — coins a long way down that are being bought
+ * ------------------------------------------------------------------ */
+
+export interface RecoveryEvidence {
+  key: string;
+  label: string;
+  found: boolean;
+  score: number;
+  weight: number;
+  detail: string;
+}
+
+/**
+ * A previous stretch where this coin was as deep in drawdown as it is now,
+ * and what the following year did.
+ *
+ * `peakGainPct` is the best price it traded, not an exit anyone achieved, and
+ * `worstDrawdownPct` is what holding through would have cost first. Reporting
+ * one without the other would turn a violent round trip into a clean multiple.
+ */
+export interface RecoveryEpisode {
+  startTime: number;
+  endTime: number;
+  drawdownPct: number;
+  peakGainPct: number;
+  worstDrawdownPct: number;
+  barsToPeak: number;
+}
+
+export interface RecoverySetup {
+  symbol: string;
+  price: number;
+  /** daily candles the measurements are drawn from */
+  windowDays: number;
+  /**
+   * Highest price *in the loaded window*, not the asset's all-time high — the
+   * spot market usually predates the perpetual listing, so a real peak can sit
+   * outside anything measurable here.
+   */
+  windowHigh: number;
+  windowLow: number;
+  drawdownPct: number;
+  /** how far price has already come up off the window low, % */
+  offLowPct: number;
+  /** consecutive recent days spent inside the base band above the low */
+  baseDays: number;
+  /** deep enough to be worth reading at all */
+  eligible: boolean;
+  evidence: RecoveryEvidence[];
+  score: number;
+  qualified: boolean;
+  grade: "prime" | "strong" | "forming" | "none";
+  /**
+   * Arithmetic, deliberately not called a target. The multiple a return to a
+   * prior level would represent is a fact about two prices; whether the market
+   * goes there is not something this engine claims to know.
+   */
+  upside: {
+    toWindowHigh: number;
+    toHalfway: number;
+    nextSupply: number | null;
+  };
+  episodes: RecoveryEpisode[];
+  invalidation: number | null;
+  headline: string;
+  explanation: string[];
+}

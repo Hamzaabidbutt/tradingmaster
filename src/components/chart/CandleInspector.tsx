@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CandleStats } from "@/engines/candleStats";
 import { StoryLine } from "@/engines/candleStory";
@@ -88,6 +88,8 @@ export default function CandleInspector({
   onMove,
   minimized = false,
   onToggleMinimize,
+  onPointerOverCard,
+  rootRef,
 }: {
   stats: CandleStats;
   pricePrecision: number;
@@ -102,6 +104,18 @@ export default function CandleInspector({
   /** collapsed to a single strip */
   minimized?: boolean;
   onToggleMinimize?: () => void;
+  /**
+   * Called as the pointer enters and leaves the card's interactive regions.
+   *
+   * The chart needs this because those regions take pointer events, which
+   * makes the crosshair report "no bar" and the container report a leave —
+   * both indistinguishable from the user actually leaving the chart. Without
+   * it the panel snaps back to the live bar the moment the cursor touches its
+   * header, which reads as the inspector refusing to track that candle.
+   */
+  onPointerOverCard?: (over: boolean) => void;
+  /** so the chart can tell "moved onto the card" from "left the chart" */
+  rootRef?: MutableRefObject<HTMLElement | null>;
 }) {
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
@@ -115,6 +129,20 @@ export default function CandleInspector({
   // match the server's (nothing) and the portal opens on mount.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  // Publish the card's root so the chart can test `relatedTarget` against it,
+  // and make sure an unmount never leaves the chart believing the pointer is
+  // still parked over a card that no longer exists.
+  useEffect(() => {
+    if (rootRef) rootRef.current = cardRef.current;
+    return () => {
+      if (rootRef) rootRef.current = null;
+      onPointerOverCard?.(false);
+    };
+  }, [rootRef, onPointerOverCard, mounted]);
+
+  const enter = useCallback(() => onPointerOverCard?.(true), [onPointerOverCard]);
+  const leave = useCallback(() => onPointerOverCard?.(false), [onPointerOverCard]);
 
   // Re-clamp when the window resizes, so a card parked at the edge of a wide
   // window is not stranded off-screen in a narrow one with no way back.
@@ -159,12 +187,27 @@ export default function CandleInspector({
     [onMove]
   );
 
-  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    grabRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    }
-  }, []);
+  const endDrag = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      grabRef.current = null;
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      // Pointer capture swallows the leave event, so a drag that ends with the
+      // cursor off the card would otherwise leave the chart believing the
+      // pointer is still parked on it — and the inspector would never return
+      // to the live bar. Settle the flag from the actual geometry instead.
+      const rect = cardRef.current?.getBoundingClientRect();
+      const inside =
+        rect != null &&
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom;
+      onPointerOverCard?.(inside);
+    },
+    [onPointerOverCard]
+  );
 
   if (!mounted) return null;
 
@@ -188,6 +231,8 @@ export default function CandleInspector({
         } ${
           onMove ? "pointer-events-auto cursor-move touch-none select-none hover:bg-white/[0.06]" : ""
         }`}
+        onPointerEnter={enter}
+        onPointerLeave={leave}
         onPointerDown={onMove ? onPointerDown : undefined}
         onPointerMove={onMove ? onPointerMove : undefined}
         onPointerUp={onMove ? endDrag : undefined}
@@ -362,6 +407,8 @@ export default function CandleInspector({
           <Divider />
           <button
             onClick={() => setStoryOpen((v) => !v)}
+            onPointerEnter={enter}
+            onPointerLeave={leave}
             className="pointer-events-auto flex w-full items-center justify-between text-[9px] uppercase tracking-[0.14em] text-slate-500 hover:text-slate-300"
           >
             Story of this candle
@@ -371,7 +418,11 @@ export default function CandleInspector({
             // Capped and scrollable: the narrative runs to a dozen lines on an
             // eventful bar, and a card that grows past the chart is worse than
             // one you scroll.
-            <div className="pointer-events-auto mt-1 max-h-[260px] space-y-1.5 overflow-y-auto pr-0.5">
+            <div
+              onPointerEnter={enter}
+              onPointerLeave={leave}
+              className="pointer-events-auto mt-1 max-h-[260px] space-y-1.5 overflow-y-auto pr-0.5"
+            >
               {groupStory(story).map(([section, lines]) => (
                 <div key={section}>
                   <div className="text-[8px] uppercase tracking-wider text-slate-600">
