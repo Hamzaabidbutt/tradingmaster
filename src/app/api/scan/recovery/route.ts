@@ -16,7 +16,7 @@ export const maxDuration = 60;
  */
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
-  const depth = Math.max(0, Number(q.get("depth") ?? 200));
+  const depth = Math.max(0, Number(q.get("depth") ?? 100));
 
   try {
     return NextResponse.json(await scanRecovery({ depth }));

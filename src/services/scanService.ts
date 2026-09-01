@@ -50,10 +50,10 @@ import {
  *    500–1000, 10 above that. At `SCAN_BARS = 400` a full sweep of the ~530
  *    perpetuals is therefore ~1060 weight against a ~2400/min IP budget, which
  *    fits. An earlier version of this comment assumed 10 per call — 5300, over
- *    budget — and that single wrong number is why the sweep was capped at 100
- *    symbols. Raising `SCAN_BARS` past 499 would more than double the weight
- *    and put a full sweep back over the line, so that constant and this depth
- *    are coupled.
+ *    budget — and that wrong number was long taken as proof a full sweep was
+ *    impossible. It is not: `?depth=0` runs the whole universe within budget.
+ *    Raising `SCAN_BARS` past 499 would more than double the weight and put
+ *    that back over the line, so the two constants are coupled.
  *  * **CPU and wall clock.** `analyzeMarket()` is pure and synchronous — its
  *    optional sub-candle, minute and deep-history arguments are what cost
  *    network, and the scanners pass none of them. So the ceiling on a full
@@ -78,14 +78,20 @@ const SCAN_BARS = 400;
  */
 const DEFAULT_CONCURRENCY = 12;
 /**
- * On-demand depth for a page load. Zero means the whole ranked universe.
+ * On-demand depth for a page load. Zero still means the whole ranked universe,
+ * and `?depth=0` on any sweep asks for exactly that.
  *
- * Full coverage is the default because partial coverage silently changes the
- * answer: "the strongest setup in the top 100 by volume" is a different claim
- * from "the strongest setup available", and the board never said which it was
- * showing.
+ * The default is bounded, though, because full coverage made every scan slow
+ * enough to feel broken: ~530 symbols against a 50-second budget meant a long
+ * wait for an answer whose first twenty rows were the only ones anyone read.
+ * Volume ranking is what makes the trade honest — the top 100 by traded value
+ * is the part of the market that is actually tradable, the response reports
+ * its own coverage, and the persisted worker rows fill in the tail.
+ *
+ * Raise it per request rather than here if a specific question needs the
+ * whole universe.
  */
-export const DEFAULT_SCAN_DEPTH = 0;
+export const DEFAULT_SCAN_DEPTH = 100;
 
 /** Apply a depth limit, where 0 (or anything non-positive) means "all". */
 export function takeDepth<T>(ranked: T[], depth: number | undefined): T[] {
@@ -926,7 +932,7 @@ export interface RecoveryScan {
  * file where the rate limit genuinely binds.
  */
 const RECOVERY_BARS = 1000;
-const RECOVERY_DEFAULT_DEPTH = 200;
+const RECOVERY_DEFAULT_DEPTH = 100;
 
 export async function scanRecovery(opts: {
   depth?: number;
