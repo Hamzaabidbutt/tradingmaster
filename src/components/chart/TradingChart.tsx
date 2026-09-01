@@ -52,13 +52,13 @@ interface Props {
 const BULL = "#00e5a0";
 const BEAR = "#ff4d6d";
 /** Cumulative delta: blue while it rises, white while it falls. */
-/* One colour per line. Both of these were two-tone — blue rising, white
-   falling — which turned each into two overlaid series and made the direction
-   readable at the cost of the *level* being hard to follow, since the eye
-   tracks the colour change rather than the slope. A single line reads as one
-   quantity, which is what they are. Chosen far enough apart that the two lines
-   are never mistaken for each other. */
-const CVD_COLOUR = "#3b82f6";
+/* One colour per line. Both were briefly two-tone — blue rising, white falling
+   — which turned each into two overlaid series and made direction readable at
+   the cost of the *level*, since the eye tracks the colour change rather than
+   the slope. A single line reads as one quantity, which is what they are.
+   CVD is back to the sky blue it originally shipped with; open interest sits
+   far enough away that the two are never mistaken for each other. */
+const CVD_COLOUR = "#38bdf8";
 const OI_COLOUR = "#a78bfa";
 /**
  * Bars carrying outsized volume with one-sided delta and/or forced flow.

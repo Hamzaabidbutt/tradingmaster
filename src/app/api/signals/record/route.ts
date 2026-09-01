@@ -16,12 +16,32 @@ export interface RecordRow {
   side: "BUY" | "SELL";
   status: string;
   confidence: number;
+  confidenceLabel: string;
+  /* The full geometry the signal was opened on. Without it the record can say
+     a footprint failed but not what it actually proposed — which is the only
+     way to tell a bad read from a bad stop. */
   entry: number;
+  stopLoss: number;
+  tp1: number;
+  tp2: number;
+  tp3: number;
+  riskReward: number;
+  expectedMovePct: number;
+  /** the engine's own words at signal time */
+  reasoning: string[];
+  invalidation: string[];
   resultPnlPct: number | null;
+  closedPrice: number | null;
   outcomeReason: string | null;
   bucket: OutcomeBucket;
   createdAt: string;
   closedAt: string | null;
+}
+
+/** Prisma stores these as Json; they were written as string arrays. */
+function asLines(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === "string");
+  return [];
 }
 
 export interface RecordReport {
@@ -78,8 +98,18 @@ export async function GET(req: NextRequest) {
         side: true,
         status: true,
         confidence: true,
+        confidenceLabel: true,
         entry: true,
+        stopLoss: true,
+        tp1: true,
+        tp2: true,
+        tp3: true,
+        riskReward: true,
+        expectedMovePct: true,
+        reasoning: true,
+        invalidation: true,
         resultPnlPct: true,
+        closedPrice: true,
         outcomeReason: true,
         outcomeAnalysis: true,
         createdAt: true,
@@ -94,8 +124,18 @@ export async function GET(req: NextRequest) {
       side: r.side as "BUY" | "SELL",
       status: r.status,
       confidence: r.confidence,
+      confidenceLabel: r.confidenceLabel,
       entry: r.entry,
+      stopLoss: r.stopLoss,
+      tp1: r.tp1,
+      tp2: r.tp2,
+      tp3: r.tp3,
+      riskReward: r.riskReward,
+      expectedMovePct: r.expectedMovePct,
+      reasoning: asLines(r.reasoning),
+      invalidation: asLines(r.invalidation),
       resultPnlPct: r.resultPnlPct,
+      closedPrice: r.closedPrice,
       outcomeReason: r.outcomeReason,
       bucket: classifyBucket({
         status: r.status,

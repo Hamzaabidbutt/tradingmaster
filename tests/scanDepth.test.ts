@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SCAN_DEPTH, takeDepth } from "@/services/scanService";
 
 /**
- * The sweep used to stop at the top 100 symbols by volume, on the belief that a
- * full pass would blow Binance's rate limit. That belief rested on a wrong
- * weight figure — `/fapi/v1/klines` costs 2 at a 400-bar limit, not 10 — so the
- * cap was answering a narrower question than the UI implied.
+ * The default depth is bounded for latency, not for rate limits: a 400-bar
+ * klines call costs 2 weight, so a full ~530-symbol pass fits the budget
+ * comfortably — it just takes long enough that the page feels broken. Callers
+ * that want everything pass `depth=0`.
  *
  * These pin the sentinel, because "0 means everything" is exactly the kind of
  * convention that gets silently re-read as "nothing".
@@ -13,9 +13,12 @@ import { DEFAULT_SCAN_DEPTH, takeDepth } from "@/services/scanService";
 describe("scan depth", () => {
   const universe = Array.from({ length: 530 }, (_, i) => `SYM${i}`);
 
-  it("defaults to the whole universe", () => {
-    expect(DEFAULT_SCAN_DEPTH).toBe(0);
-    expect(takeDepth(universe, DEFAULT_SCAN_DEPTH)).toHaveLength(530);
+  it("defaults to a bounded prefix rather than the whole universe", () => {
+    // Full coverage is affordable on Binance weight but slow enough in wall
+    // clock that every scan felt broken. The bound is about latency, and the
+    // sentinel below is what lets a caller opt back into everything.
+    expect(DEFAULT_SCAN_DEPTH).toBeGreaterThan(0);
+    expect(takeDepth(universe, DEFAULT_SCAN_DEPTH)).toHaveLength(DEFAULT_SCAN_DEPTH);
   });
 
   it("treats zero as all, never as none", () => {

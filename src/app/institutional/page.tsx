@@ -3,10 +3,22 @@
 import { useCallback, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import SignalRecord from "@/components/dashboard/SignalRecord";
-import InstitutionalSetupCard from "@/components/dashboard/InstitutionalSetupCard";
 import { GlassCard, timeAgo } from "@/components/ui/primitives";
-import { EmptyNote, ScanTimeframe, SCAN_TIMEFRAMES } from "@/components/dashboard/shared";
-import { InstitutionalSetup } from "@/engines/types";
+import {
+  EmptyNote,
+  ScanTimeframe,
+  SCAN_TIMEFRAMES,
+  fmtPrice,
+  useOpenInTerminal,
+} from "@/components/dashboard/shared";
+import {
+  InstitutionalFunding,
+  InstitutionalHistory,
+  InstitutionalRange,
+  InstitutionalSetup,
+  InstitutionalSideRead,
+  InstitutionalZone,
+} from "@/engines/types";
 
 interface Entry {
   symbol: string;
@@ -53,6 +65,8 @@ export default function InstitutionalPage() {
   const [data, setData] = useState<ScanResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const openTerminal = useOpenInTerminal();
 
   const run = useCallback(async (tf: ScanTimeframe) => {
     setLoading(true);
@@ -189,8 +203,14 @@ export default function InstitutionalPage() {
                         result — the threshold exists so the list stays worth reading.
                       </EmptyNote>
                     ) : (
-                      footprints.map((e, i) => (
-                        <InstitutionalSetupCard key={e.symbol} entry={e} rank={i + 1} />
+                      footprints.map((e) => (
+                        <Row
+                          key={e.symbol}
+                          entry={e}
+                          open={expanded === e.symbol}
+                          onToggle={() => setExpanded(expanded === e.symbol ? null : e.symbol)}
+                          onOpenTerminal={() => openTerminal(e.symbol, e.timeframe)}
+                        />
                       ))
                     )}
                   </div>
@@ -203,12 +223,14 @@ export default function InstitutionalPage() {
                     </div>
                     <div className="space-y-1.5">
                       {forming.map((e) => (
-                        // Compact: a forming read is context, and rendering
-                        // eleven evidence lines for each would bury the
-                        // qualified list above it.
-                        <div key={e.symbol} className="opacity-70">
-                          <InstitutionalSetupCard entry={e} compact />
-                        </div>
+                        <Row
+                          key={e.symbol}
+                          entry={e}
+                          muted
+                          open={expanded === e.symbol}
+                          onToggle={() => setExpanded(expanded === e.symbol ? null : e.symbol)}
+                          onOpenTerminal={() => openTerminal(e.symbol, e.timeframe)}
+                        />
                       ))}
                     </div>
                   </section>
@@ -235,5 +257,526 @@ export default function InstitutionalPage() {
         </GlassCard>
       </div>
     </AppShell>
+  );
+}
+
+function Row({
+  entry,
+  open,
+  onToggle,
+  onOpenTerminal,
+  muted,
+}: {
+  entry: Entry;
+  open: boolean;
+  onToggle: () => void;
+  onOpenTerminal: () => void;
+  muted?: boolean;
+}) {
+  const s = entry.setup;
+  const distribution = s.demand.score < s.supply.score;
+  const gradeColor =
+    s.grade === "prime"
+      ? "bg-neon-cyan/20 text-neon-cyan"
+      : s.grade === "strong"
+        ? "bg-neon-cyan/10 text-neon-cyan"
+        : "bg-white/5 text-slate-400";
+  const found = s.evidence.filter((e) => e.found);
+
+  return (
+    <div className={`rounded-lg border border-white/5 bg-white/[0.02] ${muted ? "opacity-70" : ""}`}>
+      <button onClick={onToggle} className="w-full px-2.5 py-2 text-left" aria-expanded={open}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-slate-200">
+            {entry.symbol.replace(/USDT$/, "/USDT")}
+          </span>
+          <span
+            className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${gradeColor}`}
+          >
+            {s.grade}
+          </span>
+          <span className="font-mono text-[11px] text-neon-cyan">{s.score}</span>
+          <span
+            className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+              distribution ? "bg-bear/15 text-bear" : "bg-bull/15 text-bull"
+            }`}
+            title={
+              s.side === "none"
+                ? "The leading side, shown even though nothing qualified — which side the marks favour is worth seeing either way."
+                : undefined
+            }
+          >
+            {distribution ? "distribution" : "accumulation"}
+            {s.side === "none" && " (unqualified)"}
+          </span>
+          <span className="font-mono text-[10px] text-slate-400">
+            {found.length} of {s.evidence.length} kinds
+          </span>
+          {s.range && (
+            <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[9px] text-slate-400">
+              range {(s.range.position * 100).toFixed(0)}%
+            </span>
+          )}
+          {s.history.holdRatePct != null && (
+            <span
+              className="font-mono text-[10px] text-slate-400"
+              title={`Measured on ${s.history.samples} comparable areas in this window — a record, not an edge.`}
+            >
+              held {s.history.holdRatePct.toFixed(0)}% ({s.history.samples})
+            </span>
+          )}
+          {s.zone && (
+            <span className="font-mono text-[10px] text-slate-300">
+              zone {fmtPrice(s.zone.low)}–{fmtPrice(s.zone.high)}
+              <span className="ml-1 text-slate-500">
+                ({s.zone.distancePct >= 0 ? "+" : ""}
+                {s.zone.distancePct.toFixed(2)}%)
+              </span>
+            </span>
+          )}
+          {s.funding && s.funding.payer !== "balanced" && (
+            <span
+              className={`font-mono text-[10px] ${
+                s.funding.payer === "shorts" ? "text-bull" : "text-bear"
+              }`}
+              title={`${s.funding.payer === "shorts" ? "Shorts" : "Longs"} pay ${s.funding.avgRatePct.toFixed(4)}% per settlement on average, over ${s.funding.samples} settlements`}
+            >
+              fund {s.funding.avgRatePct >= 0 ? "+" : ""}
+              {s.funding.avgRatePct.toFixed(3)}%
+            </span>
+          )}
+          {s.openInterestChangePct != null && (
+            <span
+              className={`font-mono text-[10px] ${s.openInterestChangePct >= 0 ? "text-bull" : "text-bear"}`}
+            >
+              OI {s.openInterestChangePct >= 0 ? "+" : ""}
+              {s.openInterestChangePct.toFixed(1)}%
+            </span>
+          )}
+          <span className="font-mono text-[10px] text-slate-500">{entry.timeframe}</span>
+          <span className="ml-auto text-[9px] text-slate-600">{open ? "▲" : "▼"}</span>
+        </div>
+        <p className="mt-0.5 text-[10px] text-slate-400">{s.headline}</p>
+      </button>
+
+      {open && (
+        <div className="animate-slide-up space-y-2 border-t border-white/5 px-2.5 py-2">
+          <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px] sm:grid-cols-4">
+            <Cell label="Price" value={fmtPrice(s.price)} />
+            <Cell label="Zone mid" value={s.zone ? fmtPrice(s.zone.mid) : "—"} />
+            {/* Labels follow the side: "confirm above" is simply wrong on a
+                distribution read, where the confirming break is downward. */}
+            <Cell
+              label={distribution ? "Confirm below" : "Confirm above"}
+              value={fmtPrice(s.confirmLevel)}
+              tone={distribution ? "bear" : "bull"}
+            />
+            <Cell
+              label={distribution ? "Invalidate above" : "Invalidate below"}
+              value={fmtPrice(s.invalidateLevel)}
+              tone={distribution ? "bull" : "bear"}
+            />
+            <Cell
+              label="Objective"
+              value={fmtPrice(s.objective)}
+              tone={distribution ? "bear" : "bull"}
+            />
+            <Cell label="Confluence" value={s.zone ? `${s.zone.confluence} kinds` : "—"} />
+          </div>
+
+          {/* The two sides, side by side. A demand read is worth far less when
+              the supply read next to it is equally lit, and that comparison is
+              invisible unless both are on screen. */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <SideCard read={s.demand} leading={s.demand.score >= s.supply.score} />
+            <SideCard read={s.supply} leading={s.supply.score > s.demand.score} />
+          </div>
+
+          {s.trade ? (
+            <div className="rounded border border-neon-cyan/25 bg-neon-cyan/[0.05] px-2 py-1.5">
+              <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
+                <span className="text-[9px] uppercase tracking-[0.14em] text-neon-cyan">
+                  Tracked signal
+                </span>
+                <span
+                  className={`font-mono text-[10px] font-bold ${s.trade.side === "BUY" ? "text-bull" : "text-bear"}`}
+                >
+                  {s.trade.side}
+                </span>
+                <span className="font-mono text-[10px] text-slate-400">
+                  RR {s.trade.riskReward}
+                </span>
+                <span className="font-mono text-[10px] text-slate-500">
+                  {s.trade.expectedMovePct >= 0 ? "+" : ""}
+                  {s.trade.expectedMovePct}% to TP2
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px] sm:grid-cols-5">
+                <Cell label="Entry" value={fmtPrice(s.trade.entry)} />
+                <Cell label="Stop" value={fmtPrice(s.trade.stopLoss)} tone="bear" />
+                <Cell label="TP1" value={fmtPrice(s.trade.tp1)} tone="bull" />
+                <Cell label="TP2" value={fmtPrice(s.trade.tp2)} tone="bull" />
+                <Cell label="TP3" value={fmtPrice(s.trade.tp3)} tone="bull" />
+              </div>
+              <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
+                Written to the signal tracker and evaluated against price like any other signal, so
+                this appears in the record below whichever way it goes.
+              </p>
+            </div>
+          ) : (
+            <p className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+              No trade taken from this read. The levels above stand — the geometry between them
+              just does not justify an entry, and putting an entry price on it anyway would be
+              inventing a conclusion the engine declined to draw.
+            </p>
+          )}
+
+          <FundingStrip funding={s.funding} side={s.side} lead={distribution ? "distribution" : "accumulation"} />
+          <RangeStrip range={s.range} price={s.price} />
+          <HistoryBlock history={s.history} side={s.side} />
+
+          {/* Evidence ledger — what was found, what was not, and the weight each carried. */}
+          <div>
+            <div className="pb-1 text-[9px] uppercase tracking-[0.14em] text-slate-600">
+              Evidence
+            </div>
+            <div className="space-y-1">
+              {s.evidence.map((ev) => (
+                <div
+                  key={ev.key}
+                  className={`rounded border px-2 py-1 ${
+                    ev.found
+                      ? "border-bull/20 bg-bull/[0.04]"
+                      : "border-white/5 bg-white/[0.02] opacity-60"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span
+                      className={`text-[10px] font-semibold ${ev.found ? "text-slate-200" : "text-slate-500"}`}
+                    >
+                      {ev.found ? "✓" : "·"} {ev.label}
+                    </span>
+                    {ev.price != null && (
+                      <span className="font-mono text-[10px] text-neon-cyan">
+                        {fmtPrice(ev.price)}
+                      </span>
+                    )}
+                    <span className="ml-auto font-mono text-[9px] text-slate-600">
+                      {ev.score.toFixed(0)}/{ev.weight}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-slate-400">{ev.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {s.zones.length > 1 && (
+            <div>
+              <div className="pb-1 text-[9px] uppercase tracking-[0.14em] text-slate-600">
+                Other areas with converging evidence
+              </div>
+              <div className="space-y-1">
+                {s.zones.slice(1, 5).map((z, i) => (
+                  <ZoneRow key={i} zone={z} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <ul className="space-y-1">
+            {s.explanation.map((line, i) => (
+              <li key={i} className="text-[10px] leading-relaxed text-slate-400">
+                {line}
+              </li>
+            ))}
+          </ul>
+
+          <button
+            onClick={onOpenTerminal}
+            className="rounded-md bg-neon-cyan/10 px-2 py-1 text-[10px] font-semibold text-neon-cyan hover:bg-neon-cyan/20"
+          >
+            Open in terminal →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One side's headline numbers, so the two can be compared at a glance. */
+function SideCard({ read, leading }: { read: InstitutionalSideRead; leading: boolean }) {
+  const buy = read.side === "accumulation";
+  return (
+    <div
+      className={`rounded border px-2 py-1.5 ${
+        leading
+          ? buy
+            ? "border-bull/30 bg-bull/[0.05]"
+            : "border-bear/30 bg-bear/[0.05]"
+          : "border-white/5 bg-white/[0.02] opacity-70"
+      }`}
+    >
+      <div className="flex items-baseline gap-1.5">
+        <span
+          className={`text-[10px] font-semibold uppercase tracking-wider ${buy ? "text-bull" : "text-bear"}`}
+        >
+          {buy ? "Demand" : "Supply"}
+        </span>
+        <span className="font-mono text-[11px] text-slate-200">{read.score}</span>
+        {read.qualified && (
+          <span className="rounded bg-neon-cyan/15 px-1 text-[8px] font-bold uppercase tracking-wider text-neon-cyan">
+            qualified
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 font-mono text-[9px] text-slate-500">
+        {read.kinds}/{read.evidence.length} items ·{" "}
+        {read.zone ? `${read.zone.confluence} kinds converging` : "no converging area"}
+      </div>
+      {read.zone && (
+        <div className="font-mono text-[9px] text-slate-400">
+          {fmtPrice(read.zone.low)}–{fmtPrice(read.zone.high)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Who has been paying to hold the opposite side.
+ *
+ * Rendered as its own strip rather than left inside the evidence list because
+ * it is the only input here that is a *cost* rather than an inference, and it
+ * reads against the footprint as readily as for it — funding agreeing with the
+ * side being read means the crowd is already there, which is the opposite of
+ * what an accumulation thesis wants.
+ */
+function FundingStrip({
+  funding,
+  side,
+  lead,
+}: {
+  funding: InstitutionalFunding | null;
+  side: InstitutionalSetup["side"];
+  lead: "accumulation" | "distribution";
+}) {
+  if (!funding) {
+    return (
+      <p className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+        No funding history for this symbol, so who is paying to hold the other side cannot be read.
+      </p>
+    );
+  }
+  const wanted = lead === "accumulation" ? "shorts" : "longs";
+  const supports = funding.payer === wanted;
+  const persistent = funding.consistency >= 0.7 && funding.samples >= 6;
+  const tone = supports && persistent ? "bull" : funding.payer === "balanced" ? "slate" : "bear";
+
+  return (
+    <div
+      className={`rounded border px-2 py-1.5 ${
+        tone === "bull"
+          ? "border-bull/25 bg-bull/[0.05]"
+          : tone === "bear"
+            ? "border-bear/25 bg-bear/[0.05]"
+            : "border-white/5 bg-white/[0.02]"
+      }`}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[9px] text-slate-500">
+        <span className="uppercase tracking-wider">Funding</span>
+        <span
+          className={
+            funding.payer === "balanced"
+              ? "text-slate-400"
+              : funding.payer === "shorts"
+                ? "text-bull"
+                : "text-bear"
+          }
+        >
+          {funding.payer === "balanced" ? "flat" : `${funding.payer} pay`}
+        </span>
+        <span className="text-slate-300">
+          {funding.avgRatePct >= 0 ? "+" : ""}
+          {funding.avgRatePct.toFixed(4)}% avg
+        </span>
+        <span>latest {funding.latestRatePct.toFixed(4)}%</span>
+        <span>
+          {(funding.consistency * 100).toFixed(0)}% of {funding.samples}
+        </span>
+        <span className="ml-auto text-slate-400">
+          {funding.cumulativePct >= 0 ? "+" : ""}
+          {funding.cumulativePct.toFixed(3)}% cumulative
+        </span>
+      </div>
+      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+        {funding.payer === "balanced"
+          ? "Nobody is paying meaningfully to hold either side, so there is no crowded cohort here for a move to come from."
+          : supports
+            ? persistent
+              ? `${wanted === "shorts" ? "Shorts" : "Longs"} have been paying consistently to stay where they are. Funding is a cost rather than an opinion — the side paying it is the crowded one, and price refusing to go their way while they pay for the privilege is the positioning half of ${lead}.`
+              : `${wanted === "shorts" ? "Shorts" : "Longs"} pay on average but inconsistently, which reads as one or two spikes rather than a standing cost — a squeeze that already happened, not a crowd still carrying it.`
+            : `The paying side is the same one this read points, so the crowd is already positioned this way. Funding argues against the footprint here rather than for it.`}
+        {side === "none" && " (Shown for the leading side, though nothing qualified.)"}
+      </p>
+    </div>
+  );
+}
+
+/** The balance area the checklist was located against, or why there isn't one. */
+function RangeStrip({ range, price }: { range: InstitutionalRange | null; price: number }) {
+  if (!range) {
+    return (
+      <p className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+        No balance area — the market is trending, so range position scores nothing. A high and low
+        taken out of a trend are two arbitrary numbers dressed as levels.
+      </p>
+    );
+  }
+  const pct = Math.max(0, Math.min(100, range.position * 100));
+  return (
+    <div className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5">
+      <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[9px] text-slate-500">
+        <span className="uppercase tracking-wider">Range</span>
+        <span className="text-slate-300">
+          {fmtPrice(range.low)}–{fmtPrice(range.high)}
+        </span>
+        <span>{range.bars} bars</span>
+        <span>
+          low ×{range.touchesLow} · high ×{range.touchesHigh}
+        </span>
+        <span className="ml-auto text-neon-cyan">{pct.toFixed(0)}%</span>
+      </div>
+      {/* Where price sits between the two boundaries the market has defended. */}
+      <div className="relative mt-1 h-1.5 rounded-full bg-gradient-to-r from-bull/25 via-white/5 to-bear/25">
+        <span
+          className="absolute top-1/2 h-2.5 w-0.5 -translate-y-1/2 rounded-full bg-neon-cyan"
+          style={{ left: `${pct}%` }}
+          aria-hidden
+        />
+      </div>
+      <div className="mt-0.5 flex justify-between font-mono text-[8px] text-slate-600">
+        <span>{fmtPrice(range.low)} (price {fmtPrice(price)})</span>
+        <span>{fmtPrice(range.high)}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What comparable areas did earlier in this same series.
+ *
+ * The rate is deliberately absent below the engine's sample floor — the cases
+ * are still listed, because seeing four outcomes is useful where a percentage
+ * computed from four is misleading.
+ */
+function HistoryBlock({
+  history,
+  side,
+}: {
+  history: InstitutionalHistory;
+  side: InstitutionalSetup["side"];
+}) {
+  return (
+    <div className="rounded border border-white/5 bg-white/[0.02] px-2 py-1.5">
+      <div className="pb-1 text-[9px] uppercase tracking-[0.14em] text-slate-600">
+        What happened last time — measured, not forecast
+      </div>
+      {history.holdRatePct != null ? (
+        <div className="mb-1 flex flex-wrap items-baseline gap-x-3 font-mono text-[10px]">
+          <span className="text-slate-300">
+            {history.held} held / {history.broke} broke
+          </span>
+          <span className="text-neon-cyan">{history.holdRatePct.toFixed(0)}% held</span>
+          {history.medianFavourablePct != null && (
+            <span className="text-bull">
+              median +{history.medianFavourablePct.toFixed(2)}% in favour
+            </span>
+          )}
+          {history.medianAdversePct != null && (
+            <span className="text-bear">
+              median {history.medianAdversePct.toFixed(2)}% against
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="mb-1 font-mono text-[10px] text-slate-500">
+          {history.samples} resolved case{history.samples === 1 ? "" : "s"} — rate withheld
+        </div>
+      )}
+      <p className="mb-1 text-[10px] leading-relaxed text-slate-500">{history.note}</p>
+      {history.analogues.length > 0 && (
+        <div className="space-y-0.5">
+          {history.analogues.map((a, i) => (
+            <div
+              key={i}
+              className="flex flex-wrap items-baseline gap-x-2 rounded bg-white/[0.03] px-1.5 py-1 font-mono text-[9px]"
+            >
+              <span className="text-slate-500">{localDate(a.time)}</span>
+              <span className="text-slate-300">
+                {fmtPrice(a.low)}–{fmtPrice(a.high)}
+              </span>
+              <span className="text-slate-500">{a.confluence} kinds</span>
+              <span
+                className={
+                  a.outcome === "held"
+                    ? "text-bull"
+                    : a.outcome === "broke"
+                      ? "text-bear"
+                      : "text-slate-600"
+                }
+              >
+                {a.outcome}
+              </span>
+              {a.outcome !== "unresolved" && (
+                <span className="text-slate-500">
+                  +{a.favourablePct.toFixed(2)}% / −{Math.abs(a.adversePct).toFixed(2)}%
+                </span>
+              )}
+              <span className="ml-auto text-slate-600">
+                {a.tapTime ? `tapped ${localDate(a.tapTime)}` : "never tapped"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {side === "none" && (
+        <p className="mt-1 text-[9px] text-slate-600">
+          Nothing qualified on this symbol, so these are the historical areas of the leading side
+          rather than a record behind a live signal.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function localDate(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function ZoneRow({ zone }: { zone: InstitutionalZone }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 rounded bg-white/[0.03] px-2 py-1">
+      <span className="font-mono text-[10px] text-slate-200">
+        {fmtPrice(zone.low)}–{fmtPrice(zone.high)}
+      </span>
+      <span className="font-mono text-[10px] text-slate-500">
+        {zone.distancePct >= 0 ? "+" : ""}
+        {zone.distancePct.toFixed(2)}%
+      </span>
+      <span className="font-mono text-[10px] text-neon-cyan">{zone.confluence} kinds</span>
+      <span className="text-[9px] text-slate-500">{zone.sources.join(" · ")}</span>
+    </div>
+  );
+}
+
+function Cell({ label, value, tone }: { label: string; value: string; tone?: "bull" | "bear" }) {
+  const color = tone === "bull" ? "text-bull" : tone === "bear" ? "text-bear" : "text-slate-200";
+  return (
+    <div className="rounded bg-white/[0.03] px-1.5 py-1">
+      <div className="text-[8px] uppercase tracking-wider text-slate-500">{label}</div>
+      <div className={color}>{value}</div>
+    </div>
   );
 }
