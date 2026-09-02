@@ -16,7 +16,15 @@ export async function GET() {
     const monthAgo = new Date(now - 30 * 24 * 3600 * 1000);
 
     const closed = await prisma.signal.findMany({
-      where: { status: { in: ["TP1_HIT", "TP2_HIT", "TP3_HIT", "STOPPED", "EXPIRED"] }, closedAt: { not: null } },
+      // Shadows excluded: these are the app's realised-performance headlines,
+      // and a signal nobody was in did not realise anything. The per-source
+      // record (/api/signals/record) reports both, which is where the
+      // engine-versus-allocator comparison belongs.
+      where: {
+        status: { in: ["TP1_HIT", "TP2_HIT", "TP3_HIT", "STOPPED", "EXPIRED"] },
+        closedAt: { not: null },
+        shadow: { not: true },
+      },
       orderBy: { closedAt: "desc" },
       take: 1000,
     });
@@ -36,8 +44,10 @@ export async function GET() {
     };
 
     const [active, totalSignals, strategies] = await Promise.all([
-      prisma.signal.count({ where: { status: { in: ["ACTIVE", "TP1_HIT", "TP2_HIT"] } } }),
-      prisma.signal.count(),
+      prisma.signal.count({
+        where: { status: { in: ["ACTIVE", "TP1_HIT", "TP2_HIT"] }, shadow: { not: true } },
+      }),
+      prisma.signal.count({ where: { shadow: { not: true } } }),
       prisma.strategyConfig.findMany(),
     ]);
 

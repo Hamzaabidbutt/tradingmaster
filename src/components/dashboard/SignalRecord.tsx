@@ -25,8 +25,18 @@ interface RecordRow {
   closedPrice: number | null;
   outcomeReason: string | null;
   bucket: OutcomeBucket;
+  shadow: boolean;
+  regime: string | null;
   createdAt: string;
   closedAt: string | null;
+}
+
+interface RecordSlice {
+  label: string;
+  counts: Record<OutcomeBucket, number>;
+  resolved: number;
+  accuracyPct: number | null;
+  avgPnlPct: number | null;
 }
 
 interface RecordReport {
@@ -36,8 +46,12 @@ interface RecordReport {
   accuracyPct: number | null;
   minSample: number;
   avgPnlPct: number | null;
+  taken: RecordSlice;
+  shadow: RecordSlice;
+  byRegime: RecordSlice[];
   signals: RecordRow[];
   note: string;
+  regimeNote: string;
   error?: string;
 }
 
@@ -157,6 +171,34 @@ export default function SignalRecord({
 
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{data!.note}</p>
 
+          {/* Taken vs shadow. If these diverge, the slot allocator is choosing
+              what gets recorded and the headline number is about timing rather
+              than about signal quality. */}
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+            <SliceRow slice={data!.taken} />
+            <SliceRow slice={data!.shadow} muted />
+          </div>
+          <p className="mt-1 text-[9px] leading-relaxed text-slate-600">
+            Shadows are signals this engine produced but did not take, because an open position
+            already held that symbol and timeframe. They are recorded, evaluated and never
+            alerted. If their numbers differ much from the taken ones, what you are measuring is
+            the order signals arrived in, not how good they were.
+          </p>
+
+          {data!.byRegime.length > 0 && (
+            <div className="mt-2">
+              <div className="pb-1 text-[9px] uppercase tracking-[0.14em] text-slate-600">
+                By BTC regime at signal time
+              </div>
+              <div className="space-y-1">
+                {data!.byRegime.map((r) => (
+                  <SliceRow key={r.label} slice={r} />
+                ))}
+              </div>
+              <p className="mt-1 text-[9px] leading-relaxed text-slate-600">{data!.regimeNote}</p>
+            </div>
+          )}
+
           {data!.signals.length > 0 && (
             <>
               <button
@@ -236,6 +278,28 @@ function SignalDetail({ signal: s }: { signal: RecordRow }) {
           <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${BUCKET_STYLE[s.bucket]}`}>
             {BUCKET_LABEL[s.bucket]}
           </span>
+          {s.shadow && (
+            <span
+              className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-500"
+              title="Produced by the engine but not taken — an open position already held this symbol and timeframe. Recorded and evaluated so the record measures the engine, never alerted."
+            >
+              shadow
+            </span>
+          )}
+          {s.regime && s.regime !== "unknown" && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider ${
+                s.regime === "risk_on"
+                  ? "bg-bull/10 text-bull"
+                  : s.regime === "risk_off"
+                    ? "bg-bear/10 text-bear"
+                    : "bg-white/5 text-slate-400"
+              }`}
+              title="BTC's structural regime when this signal was created"
+            >
+              {s.regime.replace("_", "-")}
+            </span>
+          )}
           <span className="font-mono text-[11px] text-neon-cyan">{s.confidence.toFixed(0)}</span>
           <span className="text-[10px] uppercase tracking-wider text-slate-500">
             {s.confidenceLabel}
@@ -332,6 +396,50 @@ function Level({
     <div>
       <div className="text-[9px] uppercase tracking-wider text-slate-600">{label}</div>
       <div className={color}>{value === null ? "—" : raw ? value.toFixed(2) : fmtPrice(value)}</div>
+    </div>
+  );
+}
+
+/**
+ * One comparable slice of the record.
+ *
+ * Deliberately shows the resolved count next to every rate, because the rate
+ * is meaningless without it — and withholds the rate entirely below the sample
+ * floor rather than printing a number computed from three trades.
+ */
+function SliceRow({ slice: sl, muted }: { slice: RecordSlice; muted?: boolean }) {
+  const total = sl.counts.successful + sl.counts.partial + sl.counts.failed + sl.counts.active;
+  return (
+    <div
+      className={`rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 ${muted ? "opacity-70" : ""}`}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="text-[10px] text-slate-300">{sl.label}</span>
+        {sl.accuracyPct != null ? (
+          <span className="font-mono text-[11px] text-neon-cyan">{sl.accuracyPct}%</span>
+        ) : (
+          <span className="font-mono text-[9px] text-slate-600">
+            rate withheld ({sl.resolved} resolved)
+          </span>
+        )}
+        {sl.avgPnlPct != null && (
+          <span className={`font-mono text-[10px] ${sl.avgPnlPct >= 0 ? "text-bull" : "text-bear"}`}>
+            avg {sl.avgPnlPct >= 0 ? "+" : ""}
+            {sl.avgPnlPct}%
+          </span>
+        )}
+        <span className="ml-auto font-mono text-[9px] text-slate-600">
+          {total} signal{total === 1 ? "" : "s"}
+        </span>
+      </div>
+      {total > 0 && (
+        <div className="mt-1 flex flex-wrap gap-x-2 font-mono text-[9px]">
+          <span className="text-bull">{sl.counts.successful} ok</span>
+          <span className="text-neon-amber">{sl.counts.partial} partial</span>
+          <span className="text-bear">{sl.counts.failed} failed</span>
+          <span className="text-slate-500">{sl.counts.active} running</span>
+        </div>
+      )}
     </div>
   );
 }

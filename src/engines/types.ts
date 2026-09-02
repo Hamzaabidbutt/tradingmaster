@@ -1654,3 +1654,31 @@ export interface RecoverySetup {
   headline: string;
   explanation: string[];
 }
+
+/* ------------------------------------------------------------------ *
+ * Market regime — the weather a signal was born into
+ * ------------------------------------------------------------------ */
+
+export interface MarketRegime {
+  /** BTC's structural trend on the reference timeframe */
+  trend: Bias;
+  /**
+   * Coarse bucket, deliberately only three wide.
+   *
+   * Per-regime win rates need samples, and a finer taxonomy splits a hundred
+   * signals into slices of two. `unknown` means the BTC read failed — which is
+   * a different fact from "mixed" and must not be silently folded into it.
+   */
+  label: "risk_on" | "risk_off" | "mixed" | "unknown";
+  timeframe: string;
+  /** BTC's move over the moving-average window, % */
+  changePct: number;
+  aboveMa: boolean;
+  volatility: "calm" | "normal" | "elevated";
+  /** ATR as a share of price, % */
+  atrPct: number;
+  /** where that ATR sits against its own recent history, 0-100 */
+  atrPercentile: number;
+  bars: number;
+  summary: string;
+}

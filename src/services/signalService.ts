@@ -7,6 +7,7 @@ import { STRATEGIES } from "@/engines/strategies";
 import { buildTradeRetrospective, computeWeightAdjustments } from "@/engines/learning";
 import { buildVerdicts } from "@/engines/confluence";
 import { classifyOutcome, computeExcursion, OutcomeSignal } from "@/engines/outcome";
+import { getMarketRegime } from "./regimeService";
 import {
   AnalystVerdict,
   ConfluenceSetup,
@@ -112,8 +113,29 @@ export async function analyzeSymbol(
 }
 
 /**
+ * Is this symbol+timeframe slot already occupied by a live position?
+ *
+ * `shadow: { not: true }` is load-bearing. Shadow rows are signals the engine
+ * produced but did not take; if they counted as occupying the slot they would
+ * block every subsequent real signal on that pair, and the tracker would go
+ * quiet after the first suppression.
+ */
+async function slotOccupied(symbol: string, timeframe: string): Promise<boolean> {
+  const existing = await prisma.signal.findFirst({
+    where: { symbol, timeframe, status: "ACTIVE", shadow: { not: true } },
+  });
+  return existing !== null;
+}
+
+/**
  * Persist a signal if the analysis produced a qualifying setup and there is
  * no similar active signal already open for the pair/timeframe.
+ *
+ * A setup arriving into an occupied slot is written as a **shadow** rather
+ * than discarded. Dropping it made the recorded set "whichever setup arrived
+ * when a slot happened to be free" — and because good setups cluster in time,
+ * that systematically kept the first of each cluster and threw the rest away.
+ * The record measured the slot allocator, not the engine.
  *
  * Records what all three independent analysts said at this moment, even though
  * they did not produce the signal (the composite ensemble did). That is what
@@ -125,10 +147,8 @@ export async function maybePersistSignal(analysis: FullAnalysis): Promise<string
   const setup = analysis.setup;
   if (!setup) return null;
   try {
-    const existing = await prisma.signal.findFirst({
-      where: { symbol: analysis.symbol, timeframe: analysis.timeframe, status: "ACTIVE" },
-    });
-    if (existing) return null;
+    const shadow = await slotOccupied(analysis.symbol, analysis.timeframe);
+    const regime = await getMarketRegime();
 
     const verdicts = buildVerdicts(
       analysis.chartAnalyst,
@@ -155,6 +175,9 @@ export async function maybePersistSignal(analysis: FullAnalysis): Promise<string
         invalidation: setup.invalidation,
         strategyScores: setup.strategyScores as object[],
         source: "COMPOSITE",
+        shadow,
+        regime: regime.label,
+        marketRegime: regime as unknown as object,
         analystVerdicts: verdicts as unknown as object[],
         marketSnapshot: {
           price: analysis.price,
@@ -172,7 +195,10 @@ export async function maybePersistSignal(analysis: FullAnalysis): Promise<string
       },
     });
 
-    await dispatchAlert({
+    // A shadow was not taken, so it must not alert. The whole point is a
+    // measurement row; paging someone about a position that does not exist
+    // would make the feature actively worse than dropping the signal.
+    if (!shadow) await dispatchAlert({
       title: `${setup.side} ${analysis.symbol} ${analysis.timeframe} — ${setup.confidence}% ${setup.confidenceLabel}`,
       body: [
         `Entry ${setup.entry} | SL ${setup.stopLoss} | TP1 ${setup.tp1} | TP2 ${setup.tp2} | TP3 ${setup.tp3} | RR ${setup.riskReward}`,
@@ -184,7 +210,7 @@ export async function maybePersistSignal(analysis: FullAnalysis): Promise<string
       kind: "signal.opened",
     });
 
-    logger.info("signals.created", { id: signal.id, symbol: analysis.symbol, side: setup.side, confidence: setup.confidence });
+    logger.info("signals.created", { id: signal.id, symbol: analysis.symbol, side: setup.side, confidence: setup.confidence, shadow, regime: regime.label });
     return signal.id;
   } catch (err) {
     logger.error("signals.persist.failed", { error: String(err) });
@@ -227,10 +253,8 @@ export async function maybePersistConfluenceSignal(
   const tfMin = TIMEFRAME_MINUTES[setup.timeframe as Timeframe] ?? 60;
 
   try {
-    const existing = await prisma.signal.findFirst({
-      where: { symbol: setup.symbol, timeframe: setup.timeframe, status: "ACTIVE" },
-    });
-    if (existing) return null;
+    const shadow = await slotOccupied(setup.symbol, setup.timeframe);
+    const regime = await getMarketRegime();
 
     const signal = await prisma.signal.create({
       data: {
@@ -258,6 +282,9 @@ export async function maybePersistConfluenceSignal(
         // fabricated scores here would corrupt the learning engine's weights.
         strategyScores: [],
         source: "CONFLUENCE",
+        shadow,
+        regime: regime.label,
+        marketRegime: regime as unknown as object,
         analystVerdicts: setup.verdicts as unknown as object[],
         confluence: setup as unknown as object,
         marketSnapshot: {
@@ -274,7 +301,7 @@ export async function maybePersistConfluenceSignal(
       },
     });
 
-    await dispatchAlert({
+    if (!shadow) await dispatchAlert({
       title: `🔥 ${setup.decision} ${setup.symbol} ${setup.timeframe} — ${setup.confidence}% confluence (${setup.confluenceVerdict})`,
       body: [
         `Entry ${entry} | SL ${setup.stopLoss} | TP ${tp1} / ${tp2} | RR ${setup.riskReward}`,
@@ -288,6 +315,8 @@ export async function maybePersistConfluenceSignal(
 
     logger.info("signals.confluence.created", {
       id: signal.id,
+      shadow,
+      regime: regime.label,
       symbol: setup.symbol,
       decision: setup.decision,
       confidence: setup.confidence,
@@ -327,10 +356,8 @@ export async function maybePersistCompositeSignal(
   }
 ): Promise<string | null> {
   try {
-    const existing = await prisma.signal.findFirst({
-      where: { symbol, timeframe, status: "ACTIVE" },
-    });
-    if (existing) return null;
+    const shadow = await slotOccupied(symbol, timeframe);
+    const regime = await getMarketRegime();
 
     const signal = await prisma.signal.create({
       data: {
@@ -351,6 +378,9 @@ export async function maybePersistCompositeSignal(
         invalidation: setup.invalidation,
         strategyScores: setup.strategyScores as unknown as object[],
         source: "COMPOSITE",
+        shadow,
+        regime: regime.label,
+        marketRegime: regime as unknown as object,
         marketSnapshot: {
           price: snapshot.price,
           bias: snapshot.bias,
@@ -362,7 +392,7 @@ export async function maybePersistCompositeSignal(
       },
     });
 
-    await dispatchAlert({
+    if (!shadow) await dispatchAlert({
       title: `${setup.side} ${symbol} ${timeframe} — ${setup.confidence}% composite (${setup.confidenceLabel})`,
       body: [
         `Entry ${setup.entry} | SL ${setup.stopLoss} | TP1 ${setup.tp1} | TP2 ${setup.tp2} | RR ${setup.riskReward}`,
@@ -374,7 +404,7 @@ export async function maybePersistCompositeSignal(
       kind: "signal.opened",
     });
 
-    logger.info("signals.composite.created", { id: signal.id, symbol, side: setup.side });
+    logger.info("signals.composite.created", { id: signal.id, symbol, side: setup.side, shadow, regime: regime.label });
     return signal.id;
   } catch (err) {
     logger.error("signals.composite.persist.failed", { symbol, error: String(err) });
@@ -405,10 +435,8 @@ export async function maybePersistInstitutionalSignal(
 
   const tfMin = TIMEFRAME_MINUTES[setup.timeframe as Timeframe] ?? 60;
   try {
-    const existing = await prisma.signal.findFirst({
-      where: { symbol: setup.symbol, timeframe: setup.timeframe, status: "ACTIVE" },
-    });
-    if (existing) return null;
+    const shadow = await slotOccupied(setup.symbol, setup.timeframe);
+    const regime = await getMarketRegime();
 
     const signal = await prisma.signal.create({
       data: {
@@ -436,6 +464,9 @@ export async function maybePersistInstitutionalSignal(
         // scores here would corrupt the learning engine's weights.
         strategyScores: [],
         source: "INSTITUTIONAL",
+        shadow,
+        regime: regime.label,
+        marketRegime: regime as unknown as object,
         institutional: setup as unknown as object,
         marketSnapshot: {
           price: setup.price,
@@ -458,7 +489,7 @@ export async function maybePersistInstitutionalSignal(
       },
     });
 
-    await dispatchAlert({
+    if (!shadow) await dispatchAlert({
       title: `🏛 ${trade.side} ${setup.symbol} ${setup.timeframe} — ${setup.grade} ${setup.side} footprint (${setup.score})`,
       body: [
         `Entry ${trade.entry} | SL ${trade.stopLoss} | TP ${trade.tp1} / ${trade.tp2} | RR ${trade.riskReward}`,
@@ -472,6 +503,8 @@ export async function maybePersistInstitutionalSignal(
 
     logger.info("signals.institutional.created", {
       id: signal.id,
+      shadow,
+      regime: regime.label,
       symbol: setup.symbol,
       side: setup.side,
       score: setup.score,
@@ -542,8 +575,10 @@ export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed
 
       if (finished) {
         closed++;
+        // Shadows feed the record and the learning engine — that is what they
+        // are for — but they were never taken, so they never alert.
         await recordLearning(sig.id, sig.side as "BUY" | "SELL", pnlPct, sig.strategyScores as unknown as StrategyScore[]);
-        await dispatchAlert({
+        if (!sig.shadow) await dispatchAlert({
           title: `${sig.symbol} ${sig.side} ${newStatus === "STOPPED" ? "stopped out" : newStatus === "EXPIRED" ? "expired" : "hit final target"}`,
           body: [
             `Result: ${pnlPct.toFixed(2)}% | Entry ${sig.entry} → ${price}`,

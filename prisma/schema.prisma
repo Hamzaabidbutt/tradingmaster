@@ -125,6 +125,29 @@ model Signal {
   /// closed signal can be reviewed against the evidence that opened it —
   /// otherwise the record says a footprint failed without saying which one.
   institutional    Json?
+  /// A signal the engine produced but did not take, because an ACTIVE signal
+  /// already occupied this symbol+timeframe slot.
+  ///
+  /// These exist purely so the record measures the *engine* rather than the
+  /// slot allocator. Suppressed signals used to be discarded, which meant the
+  /// recorded set was "whichever setup arrived when a slot happened to be
+  /// free" — and since good setups cluster in time, that systematically kept
+  /// the first of each cluster and threw away the rest.
+  ///
+  /// Nullable and read as false: rows written before this existed were all
+  /// real, taken signals.
+  shadow           Boolean?
+  /// BTC's structural regime at the moment this signal was created —
+  /// "bullish" | "bearish" | "neutral". Stored as a scalar so per-regime win
+  /// rates are a groupBy rather than a scan.
+  ///
+  /// Alt setups do not behave the same way in a BTC downtrend as in an uptrend,
+  /// and without this tag that difference is invisible in the aggregate.
+  regime           String?
+  /// The fuller regime read: BTC trend, volatility band, distance from its
+  /// moving average. Kept alongside the scalar so a closed signal can be
+  /// reviewed against the conditions it was born into.
+  marketRegime     Json?
   /// Machine-readable outcome class, set when the signal closes:
   /// false_breakout | failed_rejection | range_invalidation | ...
   outcomeReason    String?
@@ -138,6 +161,8 @@ model Signal {
   @@index([createdAt])
   @@index([source, status])
   @@index([side, status])
+  @@index([shadow, status])
+  @@index([regime, status])
 }
 
 /// Latest confluence verdict per symbol+timeframe.
