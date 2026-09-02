@@ -59,6 +59,18 @@ export async function GET(req: NextRequest) {
   const maxConfidence = q.get("maxConfidence");
   const cursor = q.get("cursor") ?? undefined;
   const limit = Math.min(200, Math.max(1, Number(q.get("limit") ?? 30)));
+  /**
+   * Shadows are signals the engine produced but did not take, kept so the
+   * record measures the engine rather than the slot allocator. They are
+   * excluded here by default: Signal History is a list of positions, and
+   * mixing in trades nobody was in would misrepresent it.
+   *
+   * `?shadow=include` shows both, `?shadow=only` shows just the suppressed
+   * ones — which is the view for asking "what did we miss?"
+   */
+  const shadowMode = q.get("shadow") ?? "exclude";
+  const shadowFilter: Prisma.SignalWhereInput =
+    shadowMode === "include" ? {} : shadowMode === "only" ? { shadow: true } : { shadow: { not: true } };
 
   // Statuses the requested outcome allows. `successful`/`failed` narrow further
   // in memory below, because the P/L sign is part of the definition.
@@ -71,6 +83,9 @@ export async function GET(req: NextRequest) {
     : status
       ? { status: status as never }
       : {};
+
+  const regime = q.get("regime");
+  const regimeFilter: Prisma.SignalWhereInput = regime ? { regime } : {};
 
   const createdAt: Prisma.DateTimeFilter = {};
   if (from) {
@@ -94,6 +109,8 @@ export async function GET(req: NextRequest) {
     ...(source ? { source: source.toUpperCase() as never } : {}),
     ...(outcomeReason ? { outcomeReason } : {}),
     ...statusFilter,
+    ...shadowFilter,
+    ...regimeFilter,
     ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
     ...(Object.keys(confidence).length > 0 ? { confidence } : {}),
   };

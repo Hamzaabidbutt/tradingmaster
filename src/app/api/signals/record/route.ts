@@ -34,8 +34,21 @@ export interface RecordRow {
   closedPrice: number | null;
   outcomeReason: string | null;
   bucket: OutcomeBucket;
+  /** produced by the engine but not taken — the slot was occupied */
+  shadow: boolean;
+  /** BTC's regime when this signal was created */
+  regime: string | null;
   createdAt: string;
   closedAt: string | null;
+}
+
+/** One slice of the record — the whole set, the taken half, or one regime. */
+export interface RecordSlice {
+  label: string;
+  counts: Record<OutcomeBucket, number>;
+  resolved: number;
+  accuracyPct: number | null;
+  avgPnlPct: number | null;
 }
 
 /** Prisma stores these as Json; they were written as string arrays. */
@@ -56,8 +69,21 @@ export interface RecordReport {
   accuracyPct: number | null;
   minSample: number;
   avgPnlPct: number | null;
+  /**
+   * The same record split three ways.
+   *
+   * `taken` versus `shadow` is the measurement that matters most: if the two
+   * differ materially, the slot allocator — not the engine — is choosing what
+   * gets recorded, and the headline number is a statement about timing rather
+   * than about signal quality.
+   */
+  taken: RecordSlice;
+  shadow: RecordSlice;
+  /** per-BTC-regime slices, so a source that only works in one is visible */
+  byRegime: RecordSlice[];
   signals: RecordRow[];
   note: string;
+  regimeNote: string;
 }
 
 /**
@@ -67,6 +93,46 @@ export interface RecordReport {
  * swings by ten points on a single trade, which is worse than showing nothing.
  */
 const MIN_SAMPLE = 10;
+
+/**
+ * Reduce a set of signals to one comparable slice.
+ *
+ * Shared by the whole-record, taken/shadow and per-regime views so the three
+ * can never drift into different definitions of "accuracy" — which is exactly
+ * how a dashboard ends up quoting two win rates that disagree.
+ */
+function slice(label: string, rows: RecordRow[]): RecordSlice {
+  const counts: Record<OutcomeBucket, number> = {
+    active: 0,
+    successful: 0,
+    partial: 0,
+    failed: 0,
+  };
+  for (const r of rows) counts[r.bucket]++;
+  const resolved = counts.successful + counts.partial + counts.failed;
+  const closed = rows.filter((r) => r.bucket !== "active" && r.resultPnlPct != null);
+  return {
+    label,
+    counts,
+    resolved,
+    // A partial counts as half everywhere, including here.
+    accuracyPct:
+      resolved >= MIN_SAMPLE
+        ? Number((((counts.successful + counts.partial * 0.5) / resolved) * 100).toFixed(1))
+        : null,
+    avgPnlPct:
+      closed.length > 0
+        ? Number((closed.reduce((s, x) => s + (x.resultPnlPct ?? 0), 0) / closed.length).toFixed(2))
+        : null,
+  };
+}
+
+const REGIME_LABEL: Record<string, string> = {
+  risk_on: "BTC risk-on (uptrend, above its average)",
+  risk_off: "BTC risk-off (downtrend, below its average)",
+  mixed: "BTC mixed (trend and location disagree)",
+  unknown: "BTC regime unreadable at signal time",
+};
 
 /**
  * Per-source signal record: how many succeeded, partially succeeded, failed.
@@ -112,6 +178,8 @@ export async function GET(req: NextRequest) {
         closedPrice: true,
         outcomeReason: true,
         outcomeAnalysis: true,
+        shadow: true,
+        regime: true,
         createdAt: true,
         closedAt: true,
       },
@@ -137,6 +205,8 @@ export async function GET(req: NextRequest) {
       resultPnlPct: r.resultPnlPct,
       closedPrice: r.closedPrice,
       outcomeReason: r.outcomeReason,
+      shadow: r.shadow === true,
+      regime: r.regime,
       bucket: classifyBucket({
         status: r.status,
         resultPnlPct: r.resultPnlPct,
@@ -158,6 +228,14 @@ export async function GET(req: NextRequest) {
     const closed = signals.filter((s) => s.bucket !== "active" && s.resultPnlPct != null);
     const enough = resolved >= MIN_SAMPLE;
 
+    const taken = slice("Taken", signals.filter((s) => !s.shadow));
+    const shadow = slice("Shadow (suppressed by an occupied slot)", signals.filter((s) => s.shadow));
+
+    const regimes = [...new Set(signals.map((s) => s.regime ?? "unknown"))];
+    const byRegime = regimes
+      .map((r) => slice(REGIME_LABEL[r] ?? r, signals.filter((s) => (s.regime ?? "unknown") === r)))
+      .sort((a, b) => b.resolved - a.resolved);
+
     return NextResponse.json({
       source,
       counts,
@@ -174,7 +252,14 @@ export async function GET(req: NextRequest) {
               (closed.reduce((s, x) => s + (x.resultPnlPct ?? 0), 0) / closed.length).toFixed(2)
             )
           : null,
+      taken,
+      shadow,
+      byRegime,
       signals,
+      regimeNote:
+        byRegime.every((r) => r.resolved < MIN_SAMPLE)
+          ? `No regime has ${MIN_SAMPLE} resolved signals yet, so no per-regime rate is quoted. This is the split worth waiting for: alt setups carry BTC beta, and a source that looks mediocre overall is often good in one regime and bad in the other — which a blended number can never show.`
+          : `Rates are quoted only for regimes with at least ${MIN_SAMPLE} resolved signals. A large gap between them means the regime, not the setup, is doing much of the work.`,
       note: enough
         ? `Measured over ${resolved} resolved signals. A partial — reached the first target, then reversed — counts as half a success, because it was a correct read managed badly rather than a wrong one. This is a record of what happened, not a projection of what will.`
         : `${resolved} resolved signal${resolved === 1 ? "" : "s"} so far, below the ${MIN_SAMPLE} needed to quote a rate. The individual results are listed; the percentage is withheld because at this sample size one trade moves it by ten points.`,
@@ -188,7 +273,11 @@ export async function GET(req: NextRequest) {
         accuracyPct: null,
         minSample: MIN_SAMPLE,
         avgPnlPct: null,
+        taken: slice("Taken", []),
+        shadow: slice("Shadow (suppressed by an occupied slot)", []),
+        byRegime: [],
         signals: [],
+        regimeNote: "",
         note: "The signal record is unavailable — the database could not be reached.",
         error: String(err),
       },

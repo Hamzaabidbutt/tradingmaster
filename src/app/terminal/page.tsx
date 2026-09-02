@@ -5,6 +5,9 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import AppShell from "@/components/layout/AppShell";
 import { useOpenInterest } from "@/hooks/useOpenInterest";
+import { useInstitutional } from "@/hooks/useInstitutional";
+import { useFunding } from "@/hooks/useFunding";
+import RatesPanel from "@/components/panels/RatesPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
 import AIInsightPanel from "@/components/panels/AIInsightPanel";
 import SignalPanel from "@/components/panels/SignalPanel";
@@ -99,6 +102,16 @@ function Terminal() {
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
   // The book is only polled while at least one wall overlay is on.
   const { openInterest } = useOpenInterest(symbol, timeframe, overlays.openInterest);
+  // Same gating: the footprint costs a full engine pass and three Binance
+  // calls, so it runs only while the overlay that draws it is switched on.
+  const { setup: institutional, loading: institutionalLoading } = useInstitutional(
+    symbol,
+    timeframe,
+    overlays.buyingChecklist
+  );
+  // Not gated — the rates box is always on screen, so there is nothing to
+  // gate it on.
+  const { report: funding } = useFunding(symbol);
   const { walls, error: wallError } = useOrderWalls(
     symbol,
     overlays.buyWalls || overlays.sellWalls
@@ -189,7 +202,7 @@ function Terminal() {
       */}
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         {/* Chart cell */}
-        <div className="glass flex h-[620px] min-w-0 flex-col p-3">
+        <div className="glass flex h-[620px] min-w-0 flex-col p-3 xl:h-auto">
           {/* Above the coin name: what the tape has done recently, with times. */}
           <EventTape analysis={analysis} />
           <MarketSelector connected={connected} price={price} countdown={formatted} />
@@ -228,13 +241,26 @@ function Terminal() {
               inspectorMinimized={inspectorMinimized}
               onInspectorMinimizeToggle={toggleInspectorMinimized}
               openInterest={openInterest}
+              institutional={institutional}
+              institutionalLoading={institutionalLoading}
             />
           </div>
         </div>
 
-        {/* AI analyst — right rail, spans both rows on desktop */}
-        <div className="h-[620px] min-w-0">
-          <AIInsightPanel analysis={analysis} />
+        {/* Right rail: the analyst feed, and the cost of carry beneath it.
+            Funding belongs next to the feed rather than down in the deep-dive
+            rows because it is context for everything above it — the same
+            footprint means something different when the crowd is paying to
+            hold the other side of it. The rail sets the row height on desktop
+            and the chart cell stretches to match, which is why that cell drops
+            its fixed height at xl. */}
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="h-[620px]">
+            <AIInsightPanel analysis={analysis} />
+          </div>
+          <div className="h-[360px]">
+            <RatesPanel report={funding} symbol={symbol} />
+          </div>
         </div>
 
         {/* Footprint sits directly under the AI feed on mobile, where the two

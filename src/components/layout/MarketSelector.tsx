@@ -58,6 +58,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "fibonacci", label: "FIB", title: "Auto Fibonacci with golden pocket" },
       { key: "tradeLevels", label: "TRADE", title: "Active setup entry / stop / targets" },
       { key: "patterns", label: "PAT", title: "Candlestick pattern markers" },
+      {
+        key: "buyingChecklist",
+        label: "BUY ✓",
+        title:
+          "The institutional buying checklist drawn on the chart: the demand area, a mark on every bar an item was found on, and the tick/cross list with both side scores.",
+      },
     ],
   },
 ];
