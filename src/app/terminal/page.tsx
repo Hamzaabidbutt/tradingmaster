@@ -8,8 +8,8 @@ import { useOpenInterest } from "@/hooks/useOpenInterest";
 import { useInstitutional } from "@/hooks/useInstitutional";
 import { useFunding } from "@/hooks/useFunding";
 import RatesPanel from "@/components/panels/RatesPanel";
-import { useHourlyProfile } from "@/hooks/useHourlyProfile";
-import HourlyProfilePanel from "@/components/panels/HourlyProfilePanel";
+import { useSeasonality } from "@/hooks/useSeasonality";
+import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
 import AIInsightPanel from "@/components/panels/AIInsightPanel";
 import SignalPanel from "@/components/panels/SignalPanel";
@@ -114,13 +114,13 @@ function Terminal() {
   // Not gated — the rates box is always on screen, so there is nothing to
   // gate it on.
   const { report: funding } = useFunding(symbol);
-  // Fetched once per symbol, never polled: a 90-day profile cannot move
+  // Fetched once per symbol, never polled: a year-long profile cannot move
   // between page views.
   const {
-    profile: hourly,
-    loading: hourlyLoading,
-    error: hourlyError,
-  } = useHourlyProfile(symbol);
+    report: seasonality,
+    loading: seasonalityLoading,
+    error: seasonalityError,
+  } = useSeasonality(symbol);
   const { walls, error: wallError } = useOrderWalls(
     symbol,
     overlays.buyWalls || overlays.sellWalls
@@ -343,14 +343,14 @@ function Terminal() {
       </div>
 
       {/* The clock. Last on the page because it is the slowest-moving thing
-          here — a 90-day profile does not change between visits — and because
-          it is context for everything above rather than a live read. */}
+          here — a year-long profile does not change between visits — and
+          because it is context for everything above rather than a live read. */}
       <div className="p-3 pt-0">
-        <div className="h-[620px]">
-          <HourlyProfilePanel
-            profile={hourly}
-            loading={hourlyLoading}
-            error={hourlyError}
+        <div className="h-[680px]">
+          <SeasonalityPanel
+            report={seasonality}
+            loading={seasonalityLoading}
+            error={seasonalityError}
             symbol={symbol}
           />
         </div>
