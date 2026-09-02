@@ -15,7 +15,7 @@ import {
   UTCTimestamp,
   createChart,
 } from "lightweight-charts";
-import { Candle, FullAnalysis, OrderWallResult } from "@/engines/types";
+import { Candle, FullAnalysis, InstitutionalSetup, OrderWallResult } from "@/engines/types";
 import { InspectorPosition, OverlayToggles } from "@/stores/marketStore";
 import { LiveKline } from "@/hooks/useLiveMarket";
 import { canApplyLiveFrame, selectBarsToAppend } from "./feed";
@@ -24,6 +24,7 @@ import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleS
 import { buildCandleStory } from "@/engines/candleStory";
 import { findStrongCandles } from "@/engines/strongCandles";
 import CandleInspector from "./CandleInspector";
+import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
 
 interface Props {
@@ -47,6 +48,10 @@ interface Props {
   onInspectorMinimizeToggle?: () => void;
   /** open-interest history for the overlay; empty when it is off or unavailable */
   openInterest?: OpenInterestPoint[];
+  /** institutional footprint for this symbol; null when the overlay is off */
+  institutional?: InstitutionalSetup | null;
+  /** true while the first footprint read for this symbol is in flight */
+  institutionalLoading?: boolean;
 }
 
 const BULL = "#00e5a0";
@@ -67,6 +72,15 @@ const OI_COLOUR = "#a78bfa";
  */
 const STRONG = "#facc15";
 const EXTREME = "#fde047";
+/**
+ * The buying checklist.
+ *
+ * Deliberately not the bull green: the marks say "an item on the demand
+ * checklist printed on this bar", which is a weaker and more specific claim
+ * than the green used everywhere else for "price went up". Emerald reads as
+ * annotation rather than as direction.
+ */
+const BUY_MARK = "#34d399";
 
 /** Height (px) of each numeric data row rendered under the price panel. */
 const ROW_H = 22;
@@ -96,6 +110,8 @@ export default function TradingChart({
   inspectorMinimized,
   onInspectorMinimizeToggle,
   openInterest = [],
+  institutional = null,
+  institutionalLoading = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -695,8 +711,34 @@ export default function TradingChart({
 
   // --- Markers: structure, sweeps, patterns, order-flow events ---
   const markers = useMemo<SeriesMarker<Time>[]>(() => {
-    if (!analysis) return [];
     const out: SeriesMarker<Time>[] = [];
+
+    /* The buying checklist, bar by bar.
+       Placed before the `analysis` guard on purpose: the footprint arrives on
+       its own request, so its marks must not vanish while the analysis poll is
+       in flight. Only the demand side is drawn — this overlay answers "where is
+       the buying", and the card alongside reports the supply score so the
+       asymmetry stays visible. */
+    if (overlays.buyingChecklist && institutional) {
+      const seen = new Set<string>();
+      for (const m of institutional.demand.marks.slice(-16)) {
+        // One marker per bar per kind: three rejection wicks on one bar is one
+        // observation, and stacking identical labels only obscures the bar.
+        const key = `${m.time}:${m.source}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          time: m.time as UTCTimestamp,
+          position: "belowBar",
+          color: BUY_MARK,
+          shape: "arrowUp",
+          text: m.label,
+          size: 0,
+        });
+      }
+    }
+
+    if (!analysis) return out.sort((a, b) => Number(a.time) - Number(b.time));
     if (overlays.structure) {
       for (const ev of analysis.structure.events.slice(-14)) {
         out.push({
@@ -766,7 +808,7 @@ export default function TradingChart({
       }
     }
     return out.sort((a, b) => Number(a.time) - Number(b.time));
-  }, [analysis, overlays]);
+  }, [analysis, overlays, institutional]);
 
   useEffect(() => {
     if (!ready || disposedRef.current || !candleSeriesRef.current) return;
@@ -776,7 +818,7 @@ export default function TradingChart({
   // --- Price lines: S/R, liquidity, trade levels, POC/VA, delta spikes ---
   useEffect(() => {
     const series = candleSeriesRef.current;
-    if (!ready || !series || !analysis || disposedRef.current) return;
+    if (!ready || !series || disposedRef.current) return;
     for (const pl of priceLinesRef.current) {
       try { series.removePriceLine(pl); } catch { /* disposed */ }
     }
@@ -792,6 +834,40 @@ export default function TradingChart({
         /* disposed */
       }
     };
+
+    /** Effect cleanup — hoisted so the early return below can hand it back. */
+    const releaseLines = (s: ISeriesApi<"Candlestick">) => () => {
+      if (!disposedRef.current) {
+        for (const pl of priceLinesRef.current) {
+          try { s.removePriceLine(pl); } catch { /* series disposed */ }
+        }
+      }
+      priceLinesRef.current = [];
+    };
+
+    /* The two levels the checklist commits to. Not a forecast: one is the price
+       whose breach says whoever was defending the area has stopped, the other
+       is what would show the position being marked up.
+
+       Added before the `analysis` guard below, because the footprint arrives on
+       its own request — and when the analysis one fails, which happens for real
+       since a server in a geo-blocked region gets 451 from Binance while the
+       browser's own connection is fine, the card would still show its ticks
+       while every level silently vanished. */
+    if (overlays.buyingChecklist && institutional) {
+      if (institutional.invalidateLevel != null) {
+        add(institutional.invalidateLevel, "rgba(255,77,109,0.6)", "INVALID", LineStyle.Dashed, 2);
+      }
+      if (institutional.confirmLevel != null) {
+        add(institutional.confirmLevel, "rgba(52,211,153,0.7)", "CONFIRM", LineStyle.Dashed, 2);
+      }
+      if (institutional.objective != null) {
+        add(institutional.objective, "rgba(52,211,153,0.4)", "OBJECTIVE", LineStyle.Dotted);
+      }
+    }
+
+    // Everything below is derived from the analysis poll.
+    if (!analysis) return releaseLines(series);
 
     if (overlays.supportResistance) {
       for (const l of analysis.srLevels.slice(0, 6)) {
@@ -837,15 +913,8 @@ export default function TradingChart({
       add(s.tp3, BULL, "TP3", LineStyle.LargeDashed);
     }
 
-    return () => {
-      if (!disposedRef.current) {
-        for (const pl of priceLinesRef.current) {
-          try { series.removePriceLine(pl); } catch { /* series disposed */ }
-        }
-      }
-      priceLinesRef.current = [];
-    };
-  }, [ready, analysis, overlays]);
+    return releaseLines(series);
+  }, [ready, analysis, overlays, institutional]);
 
   // --- Price lines: resting order-book walls ---
   // Separate effect, separate line array: the book updates on its own poll and
@@ -926,7 +995,6 @@ export default function TradingChart({
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      if (!analysis) return;
 
       const ts = chart.timeScale();
       const xOf = (t: number) => ts.timeToCoordinate(t as UTCTimestamp);
@@ -955,6 +1023,77 @@ export default function TradingChart({
         ctx.font = "9px ui-monospace, monospace";
         ctx.fillText(label, x1n + 4, Math.max(10, y1 + 10));
       };
+
+      /* ---------------- Institutional buying checklist ----------------
+         Drawn before the `analysis` guard below, for the same reason the price
+         lines are: the footprint has its own request, and a failed analysis
+         poll must not silently strip every box and bracket off a chart whose
+         checklist card is still showing ticks. */
+      if (overlays.buyingChecklist && institutional) {
+        const demand = institutional.demand;
+        const fallbackStart = candles[Math.max(0, candles.length - 60)]?.time;
+
+        /* Every candidate area faintly, then the leading one solidly on top.
+           Drawing only the winner would hide the thing worth knowing: whether
+           the evidence converged on one band or is smeared across three. */
+        for (const z of demand.zones.slice(0, 4)) {
+          if (z === demand.zone) continue;
+          drawZone(
+            z.high, z.low, z.startTime ?? fallbackStart ?? candles[0]?.time, undefined,
+            "rgba(52,211,153,0.04)", "rgba(52,211,153,0.18)",
+            `${z.confluence}x`
+          );
+        }
+        const zone = demand.zone;
+        if (zone) {
+          drawZone(
+            zone.high, zone.low, zone.startTime ?? fallbackStart ?? candles[0]?.time, undefined,
+            "rgba(52,211,153,0.10)", "rgba(52,211,153,0.55)",
+            `BUY AREA · ${zone.confluence} kind${zone.confluence === 1 ? "" : "s"} · ${zone.sources.join(" ")}`
+          );
+        }
+
+        // The individual marks, as brackets on their own bar. The series
+        // markers under the bars say *what* printed; these say which price
+        // band each one is pointing at.
+        for (const m of demand.marks.slice(-16)) {
+          const x = xOf(m.time);
+          const yTop = yOf(m.high);
+          const yBot = yOf(m.low);
+          if (x == null || yTop == null || yBot == null) continue;
+          const xn = Number(x);
+          if (xn < 0 || xn > rightEdge) continue;
+          const markW = Math.max(3, barWidth * 0.8);
+          ctx.strokeStyle = "rgba(52,211,153,0.55)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(xn - markW / 2, yTop, markW, Math.max(1.5, yBot - yTop));
+        }
+
+        // The range the checklist was located against, when there is one.
+        if (institutional.range) {
+          const r = institutional.range;
+          for (const [level, label] of [
+            [r.high, `RANGE HIGH x${r.touchesHigh}`],
+            [r.low, `RANGE LOW x${r.touchesLow}`],
+          ] as const) {
+            const y = yOf(level);
+            if (y == null) continue;
+            ctx.strokeStyle = "rgba(148,163,184,0.35)";
+            ctx.setLineDash([2, 5]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(rightEdge, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = "rgba(148,163,184,0.7)";
+            ctx.font = "9px ui-monospace, monospace";
+            ctx.fillText(label, 4, y - 3);
+          }
+        }
+      }
+
+      // Everything below is derived from the analysis poll.
+      if (!analysis) return;
 
       /* ---------------- SMC zones ---------------- */
       if (overlays.orderBlocks) {
@@ -1238,7 +1377,7 @@ export default function TradingChart({
       if (disposedRef.current) return;
       try { ts.unsubscribeVisibleTimeRangeChange(safeDraw); } catch { /* disposed */ }
     };
-  }, [ready, analysis, overlays, candles, pricePrecision]);
+  }, [ready, analysis, overlays, candles, pricePrecision, institutional]);
 
   // Keep the badge anchored when the price scale shifts without a new tick.
   useEffect(() => {
@@ -1257,6 +1396,14 @@ export default function TradingChart({
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
+
+      {overlays.buyingChecklist && (
+        <BuyingChecklistCard
+          setup={institutional}
+          loading={institutionalLoading}
+          precision={pricePrecision}
+        />
+      )}
 
       {overlays.candleInspector && inspectorStats && (
         <CandleInspector

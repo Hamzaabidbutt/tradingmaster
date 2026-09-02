@@ -748,6 +748,101 @@ describe("detectInstitutional", () => {
     }
   });
 
+  /* ---------------- Chart marks ----------------
+     These are what the overlay draws. A mark whose time is not a real bar
+     lands nowhere, and a mark that disagrees with the evidence list turns the
+     chart into a second opinion about the same checklist — which is exactly
+     what the shared engine is supposed to prevent. */
+
+  it("puts every chart mark on a bar that exists in the series", () => {
+    const candles = accumulationSeries();
+    const times = new Set(candles.map((c) => c.time));
+    const r = detectInstitutional("TESTUSDT", "1h", candles);
+    expect(r.demand.marks.length).toBeGreaterThan(0);
+    for (const side of [r.demand, r.supply]) {
+      for (const m of side.marks) {
+        expect(times.has(m.time)).toBe(true);
+        expect(m.label.length).toBeGreaterThan(0);
+        expect(m.high).toBeGreaterThanOrEqual(m.low);
+        expect(Number.isFinite(m.low)).toBe(true);
+      }
+    }
+  });
+
+  it("never marks a kind the checklist reports as absent", () => {
+    // The card renders ticks from `evidence` and the candles render marks; if
+    // a source can appear in one and not the other the two disagree in front
+    // of the user.
+    for (const seed of [4, 17, 33, 58]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(200, seed, 60));
+      for (const side of [r.demand, r.supply]) {
+        const foundKeys = new Set(side.evidence.filter((e) => e.found).map((e) => e.key));
+        for (const m of side.marks) expect(foundKeys.has(m.source)).toBe(true);
+      }
+    }
+  });
+
+  it("returns marks in time order so the chart can draw them as they came", () => {
+    const r = detectInstitutional("TESTUSDT", "1h", accumulationSeries());
+    for (const side of [r.demand, r.supply]) {
+      const times = side.marks.map((m) => m.time);
+      expect([...times].sort((a, b) => a - b)).toEqual(times);
+    }
+  });
+
+  it("labels the structure marks with the swing they are claiming", () => {
+    // The HH/HL item asserts a sequence; the marks are where the reader checks
+    // it. Demand may only ever claim upward steps, supply only downward.
+    for (const seed of [6, 21, 39, 52, 70]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(220, seed, 80));
+      for (const m of r.demand.marks) {
+        if (m.source === "structure") expect(["HH", "HL"]).toContain(m.label);
+      }
+      for (const m of r.supply.marks) {
+        if (m.source === "structure") expect(["LH", "LL"]).toContain(m.label);
+      }
+    }
+  });
+
+  it("keeps annotation marks out of the confluence count", () => {
+    // Divergence and structure are claims about a sequence, not an area. If
+    // they were clustered they would inflate a band's confluence with evidence
+    // that does not locate anything — and confluence is the whole thesis.
+    for (const seed of [9, 24, 41, 63]) {
+      const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(200, seed, 70));
+      for (const side of [r.demand, r.supply]) {
+        for (const z of side.zones) {
+          expect(z.sources).not.toContain("divergence");
+          expect(z.sources).not.toContain("structure");
+        }
+      }
+    }
+  });
+
+  it("dates a zone from the first mark inside it, not the last", () => {
+    // The box should start where the evidence began accumulating; starting it
+    // at the most recent mark would draw an area that visibly postdates the
+    // bars it is meant to describe.
+    const candles = accumulationSeries();
+    const r = detectInstitutional("TESTUSDT", "1h", candles);
+    for (const side of [r.demand, r.supply]) {
+      for (const z of side.zones) {
+        if (z.startTime == null) continue;
+        expect(candles.some((c) => c.time === z.startTime)).toBe(true);
+        const inside = side.marks.filter((m) => m.low <= z.high && m.high >= z.low);
+        if (inside.length > 0) {
+          expect(z.startTime).toBeLessThanOrEqual(Math.max(...inside.map((m) => m.time)));
+        }
+      }
+    }
+  });
+
+  it("reports no marks rather than throwing on a series too short to read", () => {
+    const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(20, 3, 50));
+    expect(r.demand.marks).toEqual([]);
+    expect(r.supply.marks).toEqual([]);
+  });
+
   it("survives arbitrary series without throwing or emitting bad numbers", () => {
     for (const seed of [1, 8, 19, 26, 44, 53]) {
       const r = detectInstitutional("TESTUSDT", "1h", syntheticCandles(160, seed, 50));

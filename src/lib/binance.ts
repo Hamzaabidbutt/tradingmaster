@@ -253,6 +253,65 @@ export async function fetchFundingRateHist(
 }
 
 /**
+ * The live half of the funding picture, from `/fapi/v1/premiumIndex`.
+ *
+ * `fetchFundingRateHist` returns what has already been *paid*; this returns
+ * what is currently accruing and the two components it is built from. Binance
+ * computes funding as the premium (mark against index) clamped around a fixed
+ * `interestRate`, so both numbers are needed to say *why* the rate is what it
+ * is: a rate that is high because perps trade above spot is crowded
+ * positioning, while a rate sitting flat on the interest-rate anchor is simply
+ * the floor and means nobody is paying for anything.
+ */
+export interface PremiumIndexSnapshot {
+  symbol: string;
+  markPrice: number;
+  indexPrice: number;
+  /** mark against index, percent — the premium half of the funding formula */
+  basisPct: number;
+  /** the rate accruing right now, as a fraction per settlement */
+  lastFundingRate: number;
+  /** Binance's fixed interest-rate component, as a fraction per settlement */
+  interestRate: number;
+  /** unix seconds of the next settlement */
+  nextFundingTime: number;
+  /** exchange time the snapshot was taken, unix seconds */
+  time: number;
+}
+
+export async function fetchPremiumIndex(symbol: string): Promise<PremiumIndexSnapshot | null> {
+  const cacheKey = `premium:${symbol}`;
+  const cached = cacheGet<PremiumIndexSnapshot>(cacheKey);
+  if (cached) return cached;
+  try {
+    const res = await fetch(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const d = await res.json();
+    const markPrice = Number(d.markPrice);
+    const indexPrice = Number(d.indexPrice);
+    if (!Number.isFinite(markPrice) || !Number.isFinite(indexPrice) || indexPrice <= 0) return null;
+    const snap: PremiumIndexSnapshot = {
+      symbol: String(d.symbol ?? symbol),
+      markPrice,
+      indexPrice,
+      basisPct: Number((((markPrice - indexPrice) / indexPrice) * 100).toFixed(4)),
+      lastFundingRate: Number(d.lastFundingRate),
+      // Not every response carries it; 0.01% per 8h is Binance's published
+      // default and is stated as the assumed value where it is displayed.
+      interestRate: Number.isFinite(Number(d.interestRate)) ? Number(d.interestRate) : 0.0001,
+      nextFundingTime: Math.floor(Number(d.nextFundingTime) / 1000),
+      time: Math.floor(Number(d.time) / 1000),
+    };
+    // The premium moves continuously, so this is a burst guard rather than a
+    // cache in any meaningful sense.
+    cacheSet(cacheKey, snap, 5_000);
+    return snap;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The periods Binance actually publishes open interest on.
  *
  * Not the same list as the chart's timeframes — there is no 1m, 8h or weekly

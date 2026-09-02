@@ -43,6 +43,11 @@ export interface OverlayToggles {
   cvd: boolean;
   /** open-interest line, two-tone like the CVD line */
   openInterest: boolean;
+  /**
+   * The institutional buying checklist, drawn on the chart: the demand area,
+   * a mark on every bar an item was found on, and the tick/cross list itself.
+   */
+  buyingChecklist: boolean;
 }
 
 /** Where the candle inspector has been dragged to, in px from the chart's top-left. */
@@ -115,6 +120,9 @@ export const useMarketStore = create<MarketState>()(
         // Off by default alongside the order-book overlays: it opens a polling
         // loop, and a chart should not start one nobody asked for.
         openInterest: false,
+        // Same reason, and it is the most expensive of them: a full engine
+        // pass plus three Binance calls per refresh.
+        buyingChecklist: false,
       },
       sidebarCollapsed: false,
       // An hour of 1m candles reads market sentiment far more steadily than

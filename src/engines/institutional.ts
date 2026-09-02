@@ -16,6 +16,7 @@ import {
   InstitutionalEvidence,
   InstitutionalFunding,
   InstitutionalHistory,
+  InstitutionalMark,
   InstitutionalRange,
   InstitutionalSetup,
   InstitutionalSideRead,
@@ -137,6 +138,8 @@ export interface Mark {
   high: number;
   /** index of the bar the mark finished forming on */
   index: number;
+  /** short chart label; absent on history-only marks, which are never drawn */
+  label?: string;
 }
 
 interface Cluster extends InstitutionalZone {
@@ -167,7 +170,12 @@ function indexOfTime(candles: Candle[], time: number): number {
  * independent confirmations, and counting them as three is how a confluence
  * score becomes meaningless. `confluence` therefore counts distinct sources.
  */
-function buildZones(marks: Mark[], price: number, limitDistance = true): Cluster[] {
+function buildZones(
+  marks: Mark[],
+  price: number,
+  limitDistance = true,
+  candles?: Candle[]
+): Cluster[] {
   if (marks.length === 0) return [];
   const tolerance = (price * ZONE_TOLERANCE_PCT) / 100;
   const sorted = [...marks].sort((a, b) => (a.low + a.high) / 2 - (b.low + b.high) / 2);
@@ -197,6 +205,8 @@ function buildZones(marks: Mark[], price: number, limitDistance = true): Cluster
       const high = Math.max(...cluster.map((m) => m.high));
       const mid = (low + high) / 2;
       const sources = [...new Set(cluster.map((m) => m.source))];
+      // The area is only complete once its last mark has printed.
+      const formedIndex = Math.max(...cluster.map((m) => m.index));
       return {
         low,
         high,
@@ -204,8 +214,11 @@ function buildZones(marks: Mark[], price: number, limitDistance = true): Cluster
         distancePct: Number((((mid - price) / price) * 100).toFixed(3)),
         confluence: sources.length,
         sources,
-        // The area is only complete once its last mark has printed.
-        formedIndex: Math.max(...cluster.map((m) => m.index)),
+        formedIndex,
+        // The *first* mark's bar, not the last: the box should start where the
+        // evidence began accumulating, which is where a reader looking at the
+        // chart expects to find it.
+        startTime: candles?.[Math.min(...cluster.map((m) => m.index))]?.time,
       };
     })
     .filter((z) => !limitDistance || Math.abs(z.distancePct) <= MAX_DISTANCE_PCT)
@@ -310,11 +323,24 @@ interface Ctx {
  * The checklist, run once per side
  * ------------------------------------------------------------------ */
 
-function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[]; marks: Mark[] } {
+function collectSide(
+  side: Side,
+  ctx: Ctx
+): { evidence: InstitutionalEvidence[]; marks: Mark[]; annotations: Mark[] } {
   const buy = side === "accumulation";
   const { candles, price, structure, orderBlocks, fvgs, delta, liqDelta, events, pd, range } = ctx;
   const evidence: InstitutionalEvidence[] = [];
   const marks: Mark[] = [];
+  /**
+   * Marks that are drawn but never clustered.
+   *
+   * Divergence and structure are checklist items about a *sequence* rather than
+   * an area, so feeding them into `buildZones` would inflate a band's
+   * confluence count with evidence that does not actually locate anything.
+   * They still belong on the chart — the reader wants to see the swing the tick
+   * came from — so they are kept in a parallel list that scoring never sees.
+   */
+  const annotations: Mark[] = [];
   const lastIdx = candles.length - 1;
 
   const wanted: Zone["direction"] = buy ? "bullish" : "bearish";
@@ -326,6 +352,7 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
   for (const g of gaps) {
     marks.push({
       source: "fvg",
+      label: "FVG",
       low: g.bottom,
       high: g.top,
       index: Math.max(0, indexOfTime(candles, g.startTime)),
@@ -351,6 +378,7 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
   for (const ob of blocks) {
     marks.push({
       source: "order_block",
+      label: "OB",
       low: ob.bottom,
       high: ob.top,
       index: Math.max(0, indexOfTime(candles, ob.startTime)),
@@ -378,6 +406,7 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
   for (const a of absorptions) {
     marks.push({
       source: "absorption",
+      label: a.atKeyLevel ? "ABS★" : "ABS",
       low: a.price * 0.999,
       high: a.price * 1.001,
       index: Math.max(0, indexOfTime(candles, a.time)),
@@ -416,6 +445,7 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
       faded = buy ? price > mid : price < mid;
       marks.push({
         source: "liquidation",
+        label: "LIQ",
         low: buy ? bar.low : mid,
         high: buy ? mid : bar.high,
         index: Math.max(0, idx),
@@ -440,6 +470,17 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
   /* ---- 5. Divergence ---- */
   const wantedDiv = buy ? "bullish" : "bearish";
   const divergences = delta.divergences.filter((d) => d.kind.includes(wantedDiv));
+  for (const d of divergences) {
+    const idx = indexOfTime(candles, d.time);
+    if (idx < 0) continue;
+    annotations.push({
+      source: "divergence",
+      label: "DIV",
+      low: d.pricePoint * 0.999,
+      high: d.pricePoint * 1.001,
+      index: idx,
+    });
+  }
   evidence.push({
     key: "divergence",
     label: buy ? "Bullish delta divergence" : "Bearish delta divergence",
@@ -465,6 +506,7 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
   for (const r of rejections) {
     marks.push({
       source: "rejection",
+      label: "REJ",
       low: buy ? r.bar.low : Math.max(r.bar.open, r.bar.close),
       high: buy ? Math.min(r.bar.open, r.bar.close) : r.bar.high,
       index: r.index,
@@ -509,6 +551,18 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
   const ll = labels.filter((s) => s.label === "LL").length;
   const stepping = buy ? hh > 0 && hl > 0 : lh > 0 && ll > 0;
   const trendAgrees = buy ? structure.trend === "bullish" : structure.trend === "bearish";
+  // The swings the item is actually claiming. Labelling them on the chart is
+  // the difference between "structure steps up" and being able to check it.
+  for (const s of labels) {
+    if (buy ? s.label !== "HH" && s.label !== "HL" : s.label !== "LH" && s.label !== "LL") continue;
+    annotations.push({
+      source: "structure",
+      label: s.label!,
+      low: s.price * 0.999,
+      high: s.price * 1.001,
+      index: s.index,
+    });
+  }
   evidence.push({
     key: "structure",
     label: buy ? "Higher highs and higher lows" : "Lower highs and lower lows",
@@ -601,10 +655,40 @@ function collectSide(side: Side, ctx: Ctx): { evidence: InstitutionalEvidence[];
           : `Open interest is ${oi >= 0 ? "up" : "down"} ${Math.abs(oi).toFixed(1)}% — ${oi < 0 ? `positions are closing, so any ${buy ? "buying" : "selling"} here is more likely ${buy ? "covering" : "unwinding"} than building.` : "no meaningful build-up."}`,
   });
 
-  return { evidence, marks };
+  return { evidence, marks, annotations };
 }
 
-function scoreSide(side: Side, evidence: InstitutionalEvidence[], zones: Cluster[]): InstitutionalSideRead {
+/**
+ * Internal index-keyed marks to chart-ready ones.
+ *
+ * Filtered by the checklist's own verdict, which is not a formality: several
+ * items have a threshold above one occurrence. A single rejection wick is a
+ * mark but not a tick (the item wants two), and forced flow that price has not
+ * reclaimed is a mark but not a tick either. Drawing those would put a symbol
+ * on the candles for an item the card next to it reports as unmet, and a
+ * reader has no way to tell which of the two is lying.
+ */
+function toChartMarks(
+  marks: Mark[],
+  candles: Candle[],
+  evidence: InstitutionalEvidence[]
+): InstitutionalMark[] {
+  const found = new Set(evidence.filter((e) => e.found).map((e) => e.key));
+  const out: InstitutionalMark[] = [];
+  for (const m of marks) {
+    const bar = candles[m.index];
+    if (!bar || !m.label || !found.has(m.source)) continue;
+    out.push({ source: m.source, label: m.label, low: m.low, high: m.high, time: bar.time });
+  }
+  return out.sort((a, b) => a.time - b.time);
+}
+
+function scoreSide(
+  side: Side,
+  evidence: InstitutionalEvidence[],
+  zones: Cluster[],
+  marks: InstitutionalMark[]
+): InstitutionalSideRead {
   const zone = zones.find((z) => z.confluence >= 2) ?? zones[0] ?? null;
   const raw = evidence.reduce((s, e) => s + e.score, 0);
   // Confluence is the thesis of this engine, so it is scored explicitly rather
@@ -617,6 +701,7 @@ function scoreSide(side: Side, evidence: InstitutionalEvidence[], zones: Cluster
     zone,
     zones: zones.slice(0, 5),
     evidence,
+    marks,
     kinds,
     score,
     qualified: score >= QUALIFY_SCORE && kinds >= QUALIFY_KINDS && (zone?.confluence ?? 0) >= 2,
@@ -804,6 +889,7 @@ export function detectInstitutional(
     zone: null,
     zones: [],
     evidence: [],
+    marks: [],
     kinds: 0,
     score: 0,
     qualified: false,
@@ -884,8 +970,18 @@ export function detectInstitutional(
 
   const demandRaw = collectSide("accumulation", ctx);
   const supplyRaw = collectSide("distribution", ctx);
-  const demand = scoreSide("accumulation", demandRaw.evidence, buildZones(demandRaw.marks, price));
-  const supply = scoreSide("distribution", supplyRaw.evidence, buildZones(supplyRaw.marks, price));
+  const demand = scoreSide(
+    "accumulation",
+    demandRaw.evidence,
+    buildZones(demandRaw.marks, price, true, candles),
+    toChartMarks([...demandRaw.marks, ...demandRaw.annotations], candles, demandRaw.evidence)
+  );
+  const supply = scoreSide(
+    "distribution",
+    supplyRaw.evidence,
+    buildZones(supplyRaw.marks, price, true, candles),
+    toChartMarks([...supplyRaw.marks, ...supplyRaw.annotations], candles, supplyRaw.evidence)
+  );
 
   // The dominant read. Ties go to demand only because something has to break
   // them; a tie is reported as such in the text rather than hidden.

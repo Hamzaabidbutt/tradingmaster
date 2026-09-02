@@ -1429,6 +1429,34 @@ export interface InstitutionalZone {
   /** how many independent kinds of evidence land inside this band */
   confluence: number;
   sources: string[];
+  /**
+   * Bar time the area finished forming — the time of its most recent mark.
+   *
+   * Optional because signals persisted before this field existed are read back
+   * without it. Present on anything the engine produces now, and it is what
+   * lets the chart start the box where the evidence actually appeared rather
+   * than at the left edge of the window.
+   */
+  startTime?: number;
+}
+
+/**
+ * One checklist mark, with the bar it printed on.
+ *
+ * The evidence list answers "was this item found"; this answers "where". They
+ * are separate because a single item can print several times — three rejection
+ * wicks are one checklist tick and three marks — and the chart needs every
+ * occurrence while the score needs one.
+ */
+export interface InstitutionalMark {
+  /** matches the `key` of the evidence item it belongs to */
+  source: string;
+  /** short human label for the chart, e.g. "FVG", "ABS" */
+  label: string;
+  low: number;
+  high: number;
+  /** bar time the mark finished forming */
+  time: number;
 }
 
 /**
@@ -1519,6 +1547,14 @@ export interface InstitutionalSideRead {
   zone: InstitutionalZone | null;
   zones: InstitutionalZone[];
   evidence: InstitutionalEvidence[];
+  /**
+   * Every individual mark behind the evidence list, with bar times.
+   *
+   * This is what makes the checklist visible on the chart instead of only in
+   * prose: the reader can see the bar each tick came from and judge it, rather
+   * than taking the engine's word that an absorption happened somewhere.
+   */
+  marks: InstitutionalMark[];
   /** how many distinct checklist items were found */
   kinds: number;
   score: number;
