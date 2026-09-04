@@ -39,6 +39,33 @@ export interface StructureEvent {
   brokenSwingTime: number;
 }
 
+/**
+ * A line through two swing points that price has actually respected.
+ *
+ * Broken lines are kept and flagged rather than dropped: where a line failed
+ * is a fact about the chart, and often becomes the level that matters next.
+ */
+export interface Trendline {
+  id: string;
+  kind: "support" | "resistance";
+  from: { time: number; price: number; index: number };
+  to: { time: number; price: number; index: number };
+  /** price change per bar; negative slopes downward */
+  slopePerBar: number;
+  /** bars that came within tolerance of the line, anchors included */
+  touches: number;
+  touchTimes: number[];
+  broken: boolean;
+  /** bar time of the first decisive close through, null while it holds */
+  brokenTime: number | null;
+  /** where the line sits at the latest bar */
+  projectedPrice: number;
+  /** signed % from current price to the line */
+  distancePct: number;
+  /** 0-100, from touch count, break state and recency. Not a probability. */
+  strength: number;
+}
+
 export interface MarketStructureResult {
   swings: SwingPoint[];
   events: StructureEvent[];
@@ -1016,6 +1043,8 @@ export interface FullAnalysis {
   vwap: VwapResult;
   fibonacci: FibonacciResult;
   equalLevels: EqualLevelLine[];
+  /** auto trendlines through respected swing points */
+  trendlines: Trendline[];
   liquidationDelta: LiquidationDeltaResult;
   /** null when 1-minute candles were unavailable */
   pulse: RecentWindowSummary | null;

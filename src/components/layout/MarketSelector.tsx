@@ -14,7 +14,24 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "orderBlocks", label: "OB", title: "Order blocks (fresh / respected / mitigated)" },
       { key: "fvg", label: "FVG", title: "Fair value gaps with fill state" },
       { key: "supplyDemand", label: "S/D", title: "Supply & demand zones, breaker blocks" },
-      { key: "structure", label: "BOS", title: "BOS / CHOCH structure markers" },
+      {
+        key: "structure",
+        label: "BOS",
+        title:
+          "BOS / CHOCH markers, each with a horizontal line back to the swing that was broken — so you can see the level the break came from, not just that it happened.",
+      },
+      {
+        key: "swingLabels",
+        label: "HH/LL",
+        title:
+          "Price action: every swing point labelled HH / HL / LH / LL, the sequence the structure read is built from.",
+      },
+      {
+        key: "trendlines",
+        label: "TREND",
+        title:
+          "Auto trendlines through swing points price actually respected — three touches minimum, and never drawn through a swing price traded straight past. Broken lines stay, dimmed.",
+      },
       { key: "premiumDiscount", label: "P/D", title: "Premium / discount zones with equilibrium" },
     ],
   },
@@ -58,6 +75,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
       { key: "fibonacci", label: "FIB", title: "Auto Fibonacci with golden pocket" },
       { key: "tradeLevels", label: "TRADE", title: "Active setup entry / stop / targets" },
       { key: "patterns", label: "PAT", title: "Candlestick pattern markers" },
+      {
+        key: "sessions",
+        label: "SESS",
+        title:
+          "Trading sessions shaded behind the candles: Asia 00-08, Europe 08-13, US 13-21, late 21-24 UTC. Hidden on daily and above, where a bar spans several of them.",
+      },
       {
         key: "buyingChecklist",
         label: "BUY ✓",

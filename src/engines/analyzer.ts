@@ -20,6 +20,7 @@ import { analyzeRangeTrading } from "./rangeTrading";
 import { buildTradeSetup, computeConfidence } from "./signal";
 import { evaluateStrategies } from "./strategies";
 import { detectSupportResistance } from "./supportResistance";
+import { detectTrendlines } from "./trendlines";
 import { Candle, FullAnalysis } from "./types";
 import { analyzeVolume } from "./volume";
 import { buildVolumeProfile } from "./volumeProfile";
@@ -81,6 +82,9 @@ export function analyzeMarket(
   const premiumDiscount = analyzePremiumDiscount(candles, structure.swings);
   const liquidity = analyzeLiquidity(candles, structure.swings, ENGINE_DEFAULTS.equalLevelTolerance);
   const equalLevels = detectEqualLevels(candles, structure.swings);
+  // Built from the same swings the structure engine reports, so a trendline
+  // is never drawn through highs the structure panel is not talking about.
+  const trendlines = detectTrendlines(candles, structure.swings);
 
   // --- Price action ---
   const patterns = detectCandlePatterns(candles);
@@ -165,6 +169,7 @@ export function analyzeMarket(
     vwap,
     fibonacci,
     equalLevels,
+    trendlines,
     liquidationDelta,
     pulse,
     multiWindow,
