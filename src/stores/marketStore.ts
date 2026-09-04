@@ -48,6 +48,12 @@ export interface OverlayToggles {
    * a mark on every bar an item was found on, and the tick/cross list itself.
    */
   buyingChecklist: boolean;
+  /** Asia / Europe / US / late trading sessions, shaded behind the candles */
+  sessions: boolean;
+  /** HH / HL / LH / LL labels printed at the swing points themselves */
+  swingLabels: boolean;
+  /** auto trendlines through swing points price has actually respected */
+  trendlines: boolean;
 }
 
 /** Where the candle inspector has been dragged to, in px from the chart's top-left. */
@@ -123,6 +129,12 @@ export const useMarketStore = create<MarketState>()(
         // Same reason, and it is the most expensive of them: a full engine
         // pass plus three Binance calls per refresh.
         buyingChecklist: false,
+        // Session shading is heavy ink behind every candle, so it is opt-in.
+        sessions: false,
+        // On by default: these are the labels the structure panel is already
+        // talking about, and reading them off the chart is the point.
+        swingLabels: true,
+        trendlines: false,
       },
       sidebarCollapsed: false,
       // An hour of 1m candles reads market sentiment far more steadily than

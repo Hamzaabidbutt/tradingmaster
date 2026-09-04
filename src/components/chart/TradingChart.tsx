@@ -26,6 +26,7 @@ import { findStrongCandles } from "@/engines/strongCandles";
 import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
+import { SESSIONS } from "@/engines/weekProfile";
 
 interface Props {
   candles: Candle[];
@@ -81,6 +82,23 @@ const EXTREME = "#fde047";
  * annotation rather than as direction.
  */
 const BUY_MARK = "#34d399";
+/**
+ * Session shading, one tint per desk.
+ *
+ * Kept very faint and drawn first, behind everything: this is background, and
+ * a session band that competes with the candles has defeated its own purpose.
+ * The tints are deliberately unlike the bull/bear palette so a shaded stretch
+ * never reads as a directional statement.
+ */
+const SESSION_TINT: Record<string, string> = {
+  asia: "rgba(148,163,184,0.05)",
+  europe: "rgba(251,191,36,0.05)",
+  us: "rgba(34,211,238,0.06)",
+  late: "rgba(167,139,250,0.05)",
+};
+/** Trendlines: intact reads as a live level, broken as a fact about the past. */
+const TREND_LIVE = "#e879f9";
+const TREND_BROKEN = "rgba(232,121,249,0.28)";
 
 /** Height (px) of each numeric data row rendered under the price panel. */
 const ROW_H = 22;
@@ -1024,6 +1042,49 @@ export default function TradingChart({
         ctx.fillText(label, x1n + 4, Math.max(10, y1 + 10));
       };
 
+      /* ---------------- Sessions ----------------
+         First, so everything else sits on top. Skipped above 4h: a daily bar
+         spans every session at once, and shading it by the session its open
+         happens to fall in would be inventing a fact. */
+      if (overlays.sessions && candles.length > 1) {
+        const barSeconds = candles[1].time - candles[0].time;
+        if (barSeconds > 0 && barSeconds <= 4 * 3600) {
+          let runStart: number | null = null;
+          let runKey: string | null = null;
+          const flush = (endX: number) => {
+            if (runStart == null || runKey == null) return;
+            ctx.fillStyle = SESSION_TINT[runKey] ?? "rgba(148,163,184,0.04)";
+            ctx.fillRect(runStart, 0, Math.max(0, endX - runStart), h);
+            const label = SESSIONS.find((x) => x.key === runKey)?.desks ?? runKey;
+            ctx.font = "8px ui-monospace, monospace";
+            // Clamped to the left edge so the first band's label is not sliced
+            // off, and drawn only when the band is genuinely wide enough for
+            // it — otherwise adjacent labels run into each other and the strip
+            // reads as one long smear of text.
+            const labelX = Math.max(3, runStart + 3);
+            if (endX - labelX > ctx.measureText(label).width + 8) {
+              ctx.fillStyle = "rgba(148,163,184,0.42)";
+              ctx.fillText(label, labelX, 9);
+            }
+          };
+          for (let i = 0; i < candles.length; i++) {
+            const x = xOf(candles[i].time);
+            if (x == null) continue;
+            const xn = Number(x);
+            if (xn < -barWidth || xn > rightEdge + barWidth) continue;
+            const hour = new Date(candles[i].time * 1000).getUTCHours();
+            const key = SESSIONS.find((sn) => hour >= sn.from && hour < sn.to)?.key ?? "asia";
+            const left = xn - barWidth / 2;
+            if (key !== runKey) {
+              flush(left);
+              runStart = left;
+              runKey = key;
+            }
+          }
+          flush(rightEdge);
+        }
+      }
+
       /* ---------------- Institutional buying checklist ----------------
          Drawn before the `analysis` guard below, for the same reason the price
          lines are: the footprint has its own request, and a failed analysis
@@ -1148,6 +1209,152 @@ export default function TradingChart({
             ctx.fillText("EQ 50%", rightEdge - 46, eqY - 4);
           }
         }
+      }
+
+      /* ---------------- Trendlines ----------------
+         Extended to the right edge in pixel space rather than by
+         extrapolating a price: lightweight-charts spaces bars evenly by index,
+         so a line that is straight in index is straight in x, and projecting
+         through the two known screen points is exact. Extrapolating a price
+         per *second* would bend the line wherever the series has a gap. */
+      if (overlays.trendlines && analysis.trendlines.length > 0) {
+        const lastTime = candles[candles.length - 1]?.time;
+        for (const tl of analysis.trendlines) {
+          const x1 = xOf(tl.from.time);
+          const y1 = yOf(tl.from.price);
+          const x2 = lastTime != null ? xOf(lastTime) : null;
+          const y2 = yOf(tl.projectedPrice);
+          if (x1 == null || y1 == null || x2 == null || y2 == null) continue;
+          const ax = Number(x1);
+          const ay = Number(y1);
+          const bx = Number(x2);
+          const by = Number(y2);
+          if (bx === ax) continue;
+          const slope = (by - ay) / (bx - ax);
+          const endX = rightEdge;
+          const endY = ay + slope * (endX - ax);
+
+          ctx.strokeStyle = tl.broken ? TREND_BROKEN : TREND_LIVE;
+          ctx.lineWidth = tl.broken ? 1 : 1.5;
+          ctx.setLineDash(tl.broken ? [5, 4] : []);
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // A dot per touch: the touches are the evidence for the line, and
+          // showing them lets the reader judge it instead of trusting it.
+          ctx.fillStyle = tl.broken ? TREND_BROKEN : TREND_LIVE;
+          for (const tt of tl.touchTimes) {
+            const tx = xOf(tt);
+            if (tx == null) continue;
+            const txn = Number(tx);
+            if (txn < 0 || txn > rightEdge) continue;
+            const ty = ay + slope * (txn - ax);
+            ctx.beginPath();
+            ctx.arc(txn, ty, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          if (endY > 8 && endY < h - 8) {
+            ctx.font = "9px ui-monospace, monospace";
+            ctx.textAlign = "right";
+            ctx.fillText(
+              `${tl.kind === "support" ? "SUP" : "RES"} ${tl.touches}x${tl.broken ? " broken" : ""}`,
+              endX - 3,
+              endY - 4
+            );
+            ctx.textAlign = "left";
+          }
+        }
+      }
+
+      /* ---------------- BOS / CHOCH: the level that broke ----------------
+         A marker says a break happened; the line says *what* broke. Drawn from
+         the swing that was taken out to the bar that took it, at the swing's
+         own price, which is the level the whole event is about. */
+      if (overlays.structure) {
+        /* One line per level, not per event. The structure engine legitimately
+           reports the same swing being broken more than once — internal and
+           external scope, or a level retaken after a pullback — and drawing
+           each of them stacks identical lines and renders their labels on top
+           of one another, which looks like a font bug rather than information. */
+        const drawn = new Set<string>();
+        for (const ev of analysis.structure.events.slice(-10)) {
+          const dedupe = `${ev.type}:${ev.brokenSwingTime}:${ev.price}`;
+          if (drawn.has(dedupe)) continue;
+          drawn.add(dedupe);
+          const y = yOf(ev.price);
+          const xa = xOf(ev.brokenSwingTime);
+          const xb = xOf(ev.time);
+          if (y == null || xa == null || xb == null) continue;
+          const ax = Math.max(0, Number(xa));
+          const bx = Math.min(rightEdge, Number(xb));
+          if (bx <= ax) continue;
+          const bull = ev.direction === "bullish";
+          const colour =
+            ev.type === "CHOCH"
+              ? "rgba(167,139,250,0.85)"
+              : bull
+                ? "rgba(0,229,160,0.7)"
+                : "rgba(255,77,109,0.7)";
+          ctx.strokeStyle = colour;
+          ctx.lineWidth = ev.type === "CHOCH" ? 1.5 : 1;
+          ctx.setLineDash(ev.scope === "internal" ? [3, 3] : []);
+          ctx.beginPath();
+          ctx.moveTo(ax, y);
+          ctx.lineTo(bx, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // Ticks at both ends: the level it came from, and where it went.
+          ctx.beginPath();
+          ctx.moveTo(ax, y - 3);
+          ctx.lineTo(ax, y + 3);
+          ctx.moveTo(bx, y - 4);
+          ctx.lineTo(bx, y + 4);
+          ctx.stroke();
+          if (bx - ax > 30) {
+            ctx.fillStyle = colour;
+            ctx.font = "8px ui-monospace, monospace";
+            ctx.fillText(
+              `${ev.scope === "internal" ? "i" : ""}${ev.type}`,
+              ax + 3,
+              y - 4
+            );
+          }
+        }
+      }
+
+      /* ---------------- Price action: swing labels ---------------- */
+      if (overlays.swingLabels) {
+        ctx.font = "9px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        for (const sw of analysis.structure.swings.filter((x) => x.label).slice(-26)) {
+          const x = xOf(sw.time);
+          const y = yOf(sw.price);
+          if (x == null || y == null) continue;
+          const xn = Number(x);
+          if (xn < 10 || xn > rightEdge - 10) continue;
+          const high = sw.kind === "high";
+          // Higher highs and higher lows are the bullish half of the sequence;
+          // colouring by that rather than by high/low is what makes the
+          // sequence readable at a glance instead of requiring it to be read.
+          const bullish = sw.label === "HH" || sw.label === "HL";
+          const equal = sw.label === "EQH" || sw.label === "EQL";
+          ctx.fillStyle = equal
+            ? "rgba(251,191,36,0.9)"
+            : bullish
+              ? "rgba(0,229,160,0.9)"
+              : "rgba(255,77,109,0.9)";
+          // Minor swings are the internal structure; drawn smaller so the
+          // major sequence still reads through them.
+          const off = sw.degree === "major" ? 12 : 8;
+          ctx.globalAlpha = sw.degree === "major" ? 1 : 0.65;
+          ctx.fillText(sw.label!, xn, high ? Number(y) - off : Number(y) + off + 3);
+          ctx.globalAlpha = 1;
+        }
+        ctx.textAlign = "left";
       }
 
       /* ---------------- Volume profile (horizontal histogram) ---------------- */
