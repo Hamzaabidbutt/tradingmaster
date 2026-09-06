@@ -25,9 +25,20 @@ import { ENGINE_DEFAULTS, FOOTPRINT_SOURCE, TIMEFRAME_MINUTES, Timeframe } from 
 
 /**
  * Bars of same-timeframe history fetched for the Chart Analyst's analogue
- * search. Paged in 1500-bar chunks, so this is a handful of requests.
+ * search. Paged in 1500-bar chunks, so this is four requests.
+ *
+ * The analogue search is the one part of the app whose quality scales almost
+ * linearly with history: it asks "when has this shape appeared before, and
+ * what followed", and the answer is only as good as the number of precedents
+ * it can find. At 3000 bars a 4h chart saw about eighteen months; at 6000 it
+ * sees three years, which spans more than one regime rather than describing
+ * whichever one happened to be running.
+ *
+ * The cost is bounded — four cached requests per analysis, not per symbol per
+ * scan — and the same deep series feeds the candle-close level track record,
+ * so both get the benefit for one fetch.
  */
-const DEEP_HISTORY_BARS = 3000;
+const DEEP_HISTORY_BARS = 6000;
 
 export async function getStrategyWeights(): Promise<Record<string, { weight: number; enabled: boolean }>> {
   try {

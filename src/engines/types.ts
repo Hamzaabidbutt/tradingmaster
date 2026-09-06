@@ -751,6 +751,28 @@ export interface CandleCloseExpansionResult {
     verdict: "decisive" | "marginal" | "weak" | "none";
     checks: { label: string; passed: boolean; detail: string }[];
   };
+  /**
+   * The two things that turn a level crossing into an expansion.
+   *
+   * A close through a level says price left the area. These say it left with
+   * intent: the candle took out the previous close rather than drifting past
+   * the level, and structure broke in the same direction rather than the level
+   * being crossed inside an unchanged market.
+   */
+  confirmation: {
+    /** the breaking candle closed beyond the previous candle's close */
+    brokePriorClose: boolean;
+    /** how far beyond, in ATR — a hair past is not the same as through */
+    priorCloseGapAtr: number;
+    /** where the breaking candle closed in its own range, 0 = low, 1 = high */
+    closeStrength: number;
+    /** structure broke the same way at or near the breaking candle */
+    brokeStructure: boolean;
+    structureEvent: { type: "BOS" | "CHOCH"; direction: Bias; time: number; price: number } | null;
+    /** both present — the form of this setup actually worth trading */
+    aligned: boolean;
+    detail: string[];
+  };
   expansionProbability: "Low" | "Medium" | "High";
   expansionScore: number;
   expectedDirection: "up" | "down" | "uncertain";

@@ -1,4 +1,4 @@
-import { findSwings } from "./marketStructure";
+import { analyzeMarketStructure, findSwings } from "./marketStructure";
 import { detectSupportResistance } from "./supportResistance";
 import { Candle, CandleCloseExpansionResult, SRLevel } from "./types";
 
@@ -10,23 +10,57 @@ import { Candle, CandleCloseExpansionResult, SRLevel } from "./types";
  * lows — and almost none of it matters. What matters is a candle that
  * *settles* beyond a level the market has been respecting.
  *
- * So this engine does four things in order:
+ * So this engine does five things in order:
  *   1. find the horizontal level that actually governs price right now
  *   2. find the most recent candle that CLOSED through it
  *   3. judge how convincing that close was — penetration, body, close
  *      location, participation, follow-through, and how well-established
  *      the level was beforehand
- *   4. check the level's own track record: if closes through this level have
+ *   4. check that the close was *confirmed*: it took out the previous
+ *      candle's close, and structure broke the same way
+ *   5. check the level's own track record: if closes through this level have
  *      historically snapped back, that history suppresses the probability
  *
  * A crossing on its own scores nothing. That is the entire point: genuine
  * expansion, weak breaks and false breakouts have to come out different.
+ *
+ * ## Why step four exists
+ *
+ * A close through a level says price left the area. It does not say price left
+ * with intent, and those are different events that look identical on a bare
+ * level chart. Two things separate them:
+ *
+ *   **The previous close.** A breaking candle that also settles beyond the
+ *   prior bar's close took the last bar's participants out with it. One that
+ *   drifts past the level while closing inside the previous bar's body has
+ *   crossed a line on a chart and done nothing else.
+ *
+ *   **Structure.** A level broken *inside an unchanged market* is a level
+ *   being tested. A level broken as structure itself breaks — a BOS or CHOCH
+ *   in the same direction — is the market changing its mind. Only the second
+ *   is expansion.
+ *
+ * Neither is scored as a bonus; their absence is scored as a discount. A close
+ * with neither confirmation is heavily marked down rather than a confirmed one
+ * being marked up, so the score cannot be inflated past what the base
+ * decisiveness earned.
  */
 
 /** Bars searched for the most recent close through the level. */
 const BREAK_LOOKBACK = 60;
 /** Bars allowed for a break to prove itself before it counts as failed. */
 const RESOLUTION_BARS = 5;
+/** Minimum distance beyond the previous close, in ATR, to count as taking it. */
+const PRIOR_CLOSE_ATR = 0.25;
+/**
+ * How high in its own range the breaking candle must close.
+ *
+ * This is the discriminating half of the confirmation. A break bar almost
+ * always closes beyond the previous close — that is what a break is — but a
+ * bar that closes near its high has held everything it took, while one that
+ * closes mid-range gave half of it back to sellers before the bell.
+ */
+const CLOSE_STRENGTH_MIN = 0.55;
 
 export function analyzeCandleCloseExpansion(
   candles: Candle[],
@@ -73,7 +107,10 @@ export function analyzeCandleCloseExpansion(
         ? "bullish"
         : "bearish";
 
-  /* ---------------- 4. This level's track record ---------------- */
+  /* ---------------- 4. Was the close confirmed? ---------------- */
+  const confirmation = judgeConfirmation(candles, liveBreak, atr);
+
+  /* ---------------- 5. This level's track record ---------------- */
   const historicalBreaks = findLevelBreaks(history, sideOf);
   const precedents = historicalBreaks
     // The live break hasn't had time to resolve — judging it here would be circular.
@@ -108,6 +145,19 @@ export function analyzeCandleCloseExpansion(
   // Start from how convincing the close was, then discount by the level's
   // own history of faking people out.
   let expansionScore = decisiveness.score * (1 - 0.55 * falseBreakRate);
+  /* Confirmation as a discount rather than a bonus, so a confirmed close can
+     never score above what its own decisiveness earned. A close through a
+     level that took out neither the previous close nor structure is the
+     textbook false break, and it is marked down hard. */
+  if (liveBreak) {
+    expansionScore *= confirmation.aligned
+      ? 1
+      : confirmation.brokeStructure
+        ? 0.88
+        : confirmation.brokePriorClose
+          ? 0.7
+          : 0.5;
+  }
   // A close back inside the band is not expansion, whatever came before it.
   if (candleClose === "inside" && liveBreak) expansionScore *= 0.4;
   // Price having already re-crossed the break direction is a failed break.
@@ -168,6 +218,7 @@ export function analyzeCandleCloseExpansion(
           ? `That is a marginal close: it is through the level but not emphatically, so it deserves a smaller position and a retest before trust.`
           : `That is a weak close — the kind that crosses a level without committing. Not treated as a breakout here.`
     );
+    for (const line of confirmation.detail) reason.push(line);
     reason.push(
       decisiveness.followThroughBars > 0
         ? `${decisiveness.followThroughBars} subsequent candle(s) have closed on the same side, so the break is being held rather than immediately rejected.`
@@ -220,6 +271,7 @@ export function analyzeCandleCloseExpansion(
     closeTime: lastClose.time,
     breakoutDirection,
     decisiveness,
+    confirmation,
     expansionProbability,
     expansionScore,
     expectedDirection,
@@ -401,6 +453,115 @@ function judgeClose(
   };
 }
 
+/**
+ * Did the breaking candle take out the previous close, and did structure go
+ * with it?
+ *
+ * Structure is read over the bars up to and including the break, never past
+ * it: including later bars would let the engine confirm a break using
+ * information that did not exist when the candle closed, which is how a
+ * backtest ends up looking far better than the live engine ever does.
+ */
+function judgeConfirmation(
+  candles: Candle[],
+  liveBreak: { index: number; direction: 1 | -1 } | null,
+  atr: number
+): CandleCloseExpansionResult["confirmation"] {
+  if (!liveBreak || liveBreak.index < 1) {
+    return {
+      brokePriorClose: false,
+      priorCloseGapAtr: 0,
+      closeStrength: 0,
+      brokeStructure: false,
+      structureEvent: null,
+      aligned: false,
+      detail: [],
+    };
+  }
+
+  const bar = candles[liveBreak.index];
+  const prev = candles[liveBreak.index - 1];
+  const up = liveBreak.direction === 1;
+
+  const gap = (bar.close - prev.close) * liveBreak.direction;
+  const priorCloseGapAtr = atr > 0 ? gap / atr : 0;
+  const range = Math.max(bar.high - bar.low, 1e-12);
+  const closeStrength = up ? (bar.close - bar.low) / range : (bar.high - bar.close) / range;
+
+  /* "Broke the previous close" needs care, because on a level break it is
+     nearly true by construction: the break bar is by definition the first to
+     close through a level the previous bar closed short of, so its close is
+     almost always beyond that one. Testing only that would pass on essentially
+     every break and confirm nothing.
+
+     What is actually informative is whether the candle took out the whole of
+     the previous bar and *closed high in its own range* while doing it. A bar
+     that spikes through, gives most of it back and settles mid-range has not
+     broken the previous close in any sense worth acting on — it has printed a
+     wick with a close attached. */
+  const tookPriorExtreme = up ? bar.close > prev.high : bar.close < prev.low;
+  const brokePriorClose =
+    priorCloseGapAtr >= PRIOR_CLOSE_ATR &&
+    tookPriorExtreme &&
+    closeStrength >= CLOSE_STRENGTH_MIN;
+
+  /* Structure over the bars available at the moment of the close. The window
+     is generous because the swing detector is a fractal and needs pivots on
+     both sides; a break bar right at the end of a short window would leave it
+     nothing to work with. */
+  const upTo = candles.slice(0, liveBreak.index + 1);
+  let structureEvent: CandleCloseExpansionResult["confirmation"]["structureEvent"] = null;
+  if (upTo.length >= 40) {
+    const structure = analyzeMarketStructure(upTo);
+    const wanted = up ? "bullish" : "bearish";
+    // Within a few bars of the close: a BOS twenty bars earlier is a
+    // different event that happens to point the same way.
+    const nearTimes = new Set(upTo.slice(-6).map((c) => c.time));
+    const match = structure.events
+      .filter((e) => e.direction === wanted && nearTimes.has(e.time))
+      .pop();
+    if (match) {
+      structureEvent = {
+        type: match.type,
+        direction: match.direction,
+        time: match.time,
+        price: match.price,
+      };
+    }
+  }
+  const brokeStructure = structureEvent != null;
+  const aligned = brokePriorClose && brokeStructure;
+
+  const detail: string[] = [];
+  detail.push(
+    brokePriorClose
+      ? `The breaking candle closed ${priorCloseGapAtr.toFixed(2)} ATR beyond the previous close, past that bar's ${up ? "high" : "low"} entirely, and finished ${(closeStrength * 100).toFixed(0)}% ${up ? "up" : "down"} its own range — it took the last bar out with it rather than drifting past the level.`
+      : tookPriorExtreme
+        ? `The breaking candle cleared the previous bar but closed only ${(closeStrength * 100).toFixed(0)}% ${up ? "up" : "down"} its own range — it gave most of the move back before the close, which is a wick with a close attached rather than a decision.`
+        : `The breaking candle did not clear the previous bar's ${up ? "high" : "low"}. It crossed the level while staying inside the prior bar's range, which is a line being crossed rather than a decision being made.`
+  );
+  detail.push(
+    brokeStructure
+      ? `Structure broke the same way at that close (${structureEvent!.type} ${structureEvent!.direction} at ${structureEvent!.price.toFixed(4)}) — the market changed its mind, rather than a level being tested inside an unchanged one.`
+      : `No structure break accompanied the close. The level gave way without the swing sequence changing, which is what a test looks like from the outside.`
+  );
+  detail.push(
+    aligned
+      ? `Both confirmations present: this is the form of the setup worth trading.`
+      : `Without both confirmations the score is discounted — a close through a level is where false breaks start, not where expansion is proven.`
+  );
+
+  return {
+    brokePriorClose,
+    priorCloseGapAtr: Number(priorCloseGapAtr.toFixed(3)),
+    closeStrength: Number(closeStrength.toFixed(3)),
+    brokeStructure,
+    structureEvent,
+    aligned,
+    detail,
+  };
+}
+
 function noClose(): CandleCloseExpansionResult["decisiveness"] {
   return {
     score: 0,
@@ -449,6 +610,15 @@ function emptyResult(price: number, why?: string): CandleCloseExpansionResult {
     closeTime: 0,
     breakoutDirection: "none",
     decisiveness: noClose(),
+    confirmation: {
+      brokePriorClose: false,
+      priorCloseGapAtr: 0,
+      closeStrength: 0,
+      brokeStructure: false,
+      structureEvent: null,
+      aligned: false,
+      detail: [],
+    },
     expansionProbability: "Low",
     expansionScore: 0,
     expectedDirection: "uncertain",
