@@ -119,6 +119,14 @@ export interface ScanEntry {
    * coin is flat.
    */
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: ConfluenceSetup;
 }
 
@@ -338,6 +346,14 @@ export interface ZoneReversalEntry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: ZoneReversalSetup;
 }
 
@@ -377,6 +393,7 @@ export async function scanZoneReversals(opts: {
       quoteVolume: r.quoteVolume,
       priceChangePercent: r.priceChangePercent,
       setup: detectZoneReversal(r.symbol, opts.timeframe, candles),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies ZoneReversalEntry;
   });
 
@@ -417,6 +434,14 @@ export interface LiquidationReversalEntry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: LiquidationReversalSetup;
 }
 
@@ -459,6 +484,7 @@ export async function scanLiquidationReversals(opts: {
       quoteVolume: r.quoteVolume,
       priceChangePercent: r.priceChangePercent,
       setup: detectLiquidationReversal(r.symbol, opts.timeframe, candles),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies LiquidationReversalEntry;
   });
 
@@ -516,6 +542,14 @@ export interface CascadeRiskEntry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: CascadeRiskSetup;
 }
 
@@ -571,6 +605,7 @@ export async function scanCascadeRisk(opts: {
         candles,
         oi.length > 0 ? oi.map((p) => p.openInterest) : null
       ),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies CascadeRiskEntry;
   });
 
@@ -611,6 +646,14 @@ export interface EngulfingEntry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: EngulfingSetup;
 }
 
@@ -648,6 +691,7 @@ export async function scanEngulfing(opts: {
       quoteVolume: r.quoteVolume,
       priceChangePercent: r.priceChangePercent,
       setup: detectBullishEngulfing(r.symbol, opts.timeframe, candles),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies EngulfingEntry;
   });
 
@@ -686,6 +730,14 @@ export interface InstitutionalEntry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: InstitutionalSetup;
 }
 
@@ -739,6 +791,7 @@ export async function scanInstitutional(opts: {
         oi.length > 0 ? oi.map((p) => p.openInterest) : null,
         funding.length > 0 ? funding : null
       ),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies InstitutionalEntry;
   });
 
@@ -777,6 +830,14 @@ export interface CompositeEntry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   price: number;
   bias: Bias;
   bullishProbability: number;
@@ -856,6 +917,7 @@ export async function scanComposite(opts: {
         .sort((a, b) => Math.abs(b.score * b.weight) - Math.abs(a.score * a.weight))
         .slice(0, 5)
         .map((s) => ({ key: s.key, name: s.name, score: s.score, weight: s.weight })),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies CompositeEntry;
   });
 
@@ -899,6 +961,14 @@ export interface RecoveryEntry {
   label: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
   setup: RecoverySetup;
 }
 
@@ -955,6 +1025,7 @@ export async function scanRecovery(opts: {
         candles,
         oi.length > 0 ? oi.map((p) => p.openInterest) : null
       ),
+      barTime: candles[candles.length - 1]?.time ?? 0,
     } satisfies RecoveryEntry;
   });
 
@@ -1045,6 +1116,9 @@ export async function scanUniverse(opts: ScanOptions): Promise<UniverseScan> {
       timeframe: opts.timeframe,
       quoteVolume: slice[i].quoteVolume,
       priceChangePercent: slice[i].priceChangePercent,
+      // The setup carries its own timestamp; using the sweep's would claim a
+      // freshness the underlying read may not have.
+      barTime: res.value.generatedAt,
       setup: res.value,
     });
   });
@@ -1185,6 +1259,9 @@ export async function loadPersistedScan(
       timeframe: r.timeframe,
       quoteVolume: r.quoteVolume,
       priceChangePercent: r.priceChangePct,
+      // Persisted rows carry the time the worker scanned them, which for these
+      // is the honest answer to "how old is this read".
+      barTime: Math.floor(r.scannedAt.getTime() / 1000),
       setup: r.setup as unknown as ConfluenceSetup,
     }));
   } catch (err) {

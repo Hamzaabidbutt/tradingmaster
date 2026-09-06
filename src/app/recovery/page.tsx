@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
-import { GlassCard, timeAgo } from "@/components/ui/primitives";
+import { BarClock, GlassCard, ScanTimestamp } from "@/components/ui/primitives";
 import {
   EmptyNote,
   fmtPrice,
@@ -16,6 +16,8 @@ interface Entry {
   label: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /** open time of the last closed bar this read used, unix seconds */
+  barTime: number;
   setup: RecoverySetup;
 }
 
@@ -89,7 +91,7 @@ export default function RecoveryPage() {
               {data && (
                 <span className="font-mono text-[10px] font-normal text-slate-500">
                   {candidates.length} candidates · {data.eligible} deep enough · {data.scanned}{" "}
-                  scanned · {timeAgo(data.scannedAt)}
+                  scanned · <ScanTimestamp at={data.scannedAt} />
                 </span>
               )}
             </span>
@@ -274,6 +276,7 @@ function Row({
           <span className="text-xs font-semibold text-slate-200">
             {entry.symbol.replace(/USDT$/, "/USDT")}
           </span>
+          <BarClock at={entry.barTime} />
           <span
             className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${gradeColor}`}
           >

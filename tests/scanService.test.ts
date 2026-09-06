@@ -129,6 +129,7 @@ function entry(symbol: string, over: Partial<ConfluenceSetup> = {}, quoteVolume 
     timeframe: "1h",
     quoteVolume,
     priceChangePercent: 1,
+    barTime: 1_700_000_000,
     setup: setup({ symbol, ...over }),
   };
 }

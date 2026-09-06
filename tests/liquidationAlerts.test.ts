@@ -51,6 +51,7 @@ function entry(over: Partial<LiquidationReversalSetup> = {}, symbol = "BTCUSDT")
     timeframe: "5m",
     quoteVolume: 1e9,
     priceChangePercent: -3.2,
+  barTime: 1_700_000_000,
     setup,
   };
 }
