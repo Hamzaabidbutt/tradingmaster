@@ -35,6 +35,11 @@ enum SignalStatus {
   STOPPED
   EXPIRED
   CANCELLED
+  /// Closed at a stop that had already been moved to entry or better. Its own
+  /// status because it is neither a win nor a loss: counted as a loss, active
+  /// management would look like it damages the record; counted as a win, the
+  /// record fills with trades that made nothing.
+  BREAKEVEN
 }
 
 /// Which module produced a signal. COMPOSITE is the weighted 28-strategy
@@ -153,6 +158,20 @@ model Signal {
   outcomeReason    String?
   /// OutcomeAnalysis — excursion, who was right, biggest contributor.
   outcomeAnalysis  Json?
+  /// The stop actually in force, after management has moved it.
+  ///
+  /// Separate from `stopLoss`, which stays as the signal was opened: comparing
+  /// the two is what says whether a trade was protected before it closed, and
+  /// overwriting the original would erase the risk the signal was taken with.
+  managedStop      Float?
+  /// Where management has got to: initial | breakeven | trail_tp1 | trail_tp2.
+  managementStage  String?
+  /// Timestamped notes from each management pass that changed something —
+  /// stop moves and early exits, with the reasoning that produced them.
+  managementLog    Json?
+  /// Why the trade was closed ahead of its stop, when it was:
+  /// structure_flip | adverse_close | stall.
+  earlyExitReason  String?
 
   learning         LearningRecord[]
 

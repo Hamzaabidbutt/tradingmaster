@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { classifyBucket, OutcomeBucket } from "@/engines/outcomeBuckets";
+import { classifyBucket, OutcomeBucket, resolvedCount, winRate } from "@/engines/outcomeBuckets";
 import { OutcomeAnalysis } from "@/engines/types";
 import { refreshOpenSignalsInBackground } from "@/services/signalLifecycle";
 
@@ -46,7 +46,10 @@ export interface RecordRow {
 export interface RecordSlice {
   label: string;
   counts: Record<OutcomeBucket, number>;
+  /** wins + losses; the only denominator a rate here is ever quoted over */
   resolved: number;
+  /** closed at a protected stop — excluded from `resolved` on purpose */
+  breakeven: number;
   accuracyPct: number | null;
   avgPnlPct: number | null;
 }
@@ -60,11 +63,12 @@ function asLines(value: unknown): string[] {
 export interface RecordReport {
   source: Source | null;
   counts: Record<OutcomeBucket, number>;
-  /** resolved = successful + partial + failed; the denominator that matters */
+  /** resolved = successful + failed. Break-evens are counted separately. */
   resolved: number;
+  breakeven: number;
   /**
-   * Successful plus half of partial, over resolved. Null until enough have
-   * closed — a rate from three trades is noise wearing a percentage sign.
+   * Wins over wins-plus-losses. Null until enough have closed — a rate from
+   * three trades is noise wearing a percentage sign.
    */
   accuracyPct: number | null;
   minSample: number;
@@ -105,21 +109,20 @@ function slice(label: string, rows: RecordRow[]): RecordSlice {
   const counts: Record<OutcomeBucket, number> = {
     active: 0,
     successful: 0,
-    partial: 0,
+    breakeven: 0,
     failed: 0,
   };
   for (const r of rows) counts[r.bucket]++;
-  const resolved = counts.successful + counts.partial + counts.failed;
+  // Wins plus losses. Break-evens resolved without resolving the question the
+  // rate is asking, so they are reported beside it rather than inside it.
+  const resolved = resolvedCount(counts);
   const closed = rows.filter((r) => r.bucket !== "active" && r.resultPnlPct != null);
   return {
     label,
     counts,
     resolved,
-    // A partial counts as half everywhere, including here.
-    accuracyPct:
-      resolved >= MIN_SAMPLE
-        ? Number((((counts.successful + counts.partial * 0.5) / resolved) * 100).toFixed(1))
-        : null,
+    breakeven: counts.breakeven,
+    accuracyPct: resolved >= MIN_SAMPLE ? winRate(counts) : null,
     avgPnlPct:
       closed.length > 0
         ? Number((closed.reduce((s, x) => s + (x.resultPnlPct ?? 0), 0) / closed.length).toFixed(2))
@@ -219,12 +222,12 @@ export async function GET(req: NextRequest) {
     const counts: Record<OutcomeBucket, number> = {
       active: 0,
       successful: 0,
-      partial: 0,
+      breakeven: 0,
       failed: 0,
     };
     for (const s of signals) counts[s.bucket]++;
 
-    const resolved = counts.successful + counts.partial + counts.failed;
+    const resolved = resolvedCount(counts);
     const closed = signals.filter((s) => s.bucket !== "active" && s.resultPnlPct != null);
     const enough = resolved >= MIN_SAMPLE;
 
@@ -240,11 +243,8 @@ export async function GET(req: NextRequest) {
       source,
       counts,
       resolved,
-      // A partial counts as half: the direction was right and the first target
-      // paid, but the trade did not finish green. Same rule as everywhere else.
-      accuracyPct: enough
-        ? Number((((counts.successful + counts.partial * 0.5) / resolved) * 100).toFixed(1))
-        : null,
+      accuracyPct: enough ? winRate(counts) : null,
+      breakeven: counts.breakeven,
       minSample: MIN_SAMPLE,
       avgPnlPct:
         closed.length > 0
@@ -261,15 +261,16 @@ export async function GET(req: NextRequest) {
           ? `No regime has ${MIN_SAMPLE} resolved signals yet, so no per-regime rate is quoted. This is the split worth waiting for: alt setups carry BTC beta, and a source that looks mediocre overall is often good in one regime and bad in the other — which a blended number can never show.`
           : `Rates are quoted only for regimes with at least ${MIN_SAMPLE} resolved signals. A large gap between them means the regime, not the setup, is doing much of the work.`,
       note: enough
-        ? `Measured over ${resolved} resolved signals. A partial — reached the first target, then reversed — counts as half a success, because it was a correct read managed badly rather than a wrong one. This is a record of what happened, not a projection of what will.`
+        ? `Measured over ${resolved} decided signals — wins and losses only. A signal counts as successful once it reaches its first target, because that is the claim it actually made; ${counts.breakeven} more closed at a protected stop and are excluded from the rate entirely, since a break-even resolved without resolving the question. This is a record of what happened, not a projection of what will.`
         : `${resolved} resolved signal${resolved === 1 ? "" : "s"} so far, below the ${MIN_SAMPLE} needed to quote a rate. The individual results are listed; the percentage is withheld because at this sample size one trade moves it by ten points.`,
     } satisfies RecordReport);
   } catch (err) {
     return NextResponse.json(
       {
         source,
-        counts: { active: 0, successful: 0, partial: 0, failed: 0 },
+        counts: { active: 0, successful: 0, breakeven: 0, failed: 0 },
         resolved: 0,
+        breakeven: 0,
         accuracyPct: null,
         minSample: MIN_SAMPLE,
         avgPnlPct: null,

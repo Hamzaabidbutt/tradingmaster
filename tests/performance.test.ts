@@ -532,36 +532,57 @@ describe("parseVerdicts", () => {
   });
 });
 
-describe("partial successes", () => {
+describe("break-evens and TP1 successes", () => {
   /** A red trade that nonetheless tagged its first target. */
-  const partial = (over: Partial<PerfSignal> = {}) =>
+  const tp1 = (over: Partial<PerfSignal> = {}) =>
     sig({
       ...LOSS,
       outcomeAnalysis: analysis({ win: false, excursion: { ...analysis().excursion, targetProgressPct: 118 } }),
       ...over,
     });
 
-  it("keeps partials out of both the win count and the failure count", () => {
-    const report = computePerformance([sig(WIN), sig(LOSS), partial()]);
+  /** A trade closed at a stop that had already been moved to entry. */
+  const breakEven = (over: Partial<PerfSignal> = {}) =>
+    sig({
+      ...LOSS,
+      status: "BREAKEVEN",
+      resultPnlPct: -0.04,
+      outcomeAnalysis: analysis({ win: false, excursion: { ...analysis().excursion, targetProgressPct: 55 } }),
+      ...over,
+    });
+
+  it("counts reaching TP1 as a success even when the trade closed red", () => {
+    // The app-wide rule: TP1 is the claim the signal made. Deriving this from
+    // the closing price instead is how the analytics page ends up disagreeing
+    // with Signal History about the same trade.
+    const report = computePerformance([sig(WIN), sig(LOSS), tp1()]);
     const o = report.overall;
-    expect(o.successful).toBe(1);
-    expect(o.partials).toBe(1);
+    expect(o.successful).toBe(2);
     expect(o.failed).toBe(1);
-    // The three buckets account for every closed signal, with none counted twice.
-    expect(o.successful + o.partials + o.failed).toBe(3);
+    expect(o.breakEvens).toBe(0);
   });
 
-  it("does not flatter the win rate with partials", () => {
-    // 5 wins, 5 partials, 10 outright failures — comfortably past the sample
-    // floor, so the rate is published rather than withheld.
+  it("keeps break-evens out of both the win count and the failure count", () => {
+    const report = computePerformance([sig(WIN), sig(LOSS), breakEven()]);
+    const o = report.overall;
+    expect(o.successful).toBe(1);
+    expect(o.failed).toBe(1);
+    expect(o.breakEvens).toBe(1);
+    // Every closed signal lands in exactly one bucket.
+    expect(o.successful + o.failed + o.breakEvens).toBe(3);
+  });
+
+  it("keeps break-evens out of the win-rate denominator", () => {
+    // 5 wins, 10 losses, 5 break-evens. The rate is 5/15, not 5/20 — a trader
+    // must not be able to move their measured accuracy by managing trades
+    // differently rather than by reading the market better.
     const report = computePerformance([
       ...many(5, () => WIN),
-      ...Array.from({ length: 5 }, () => partial()),
       ...many(10, () => LOSS),
+      ...Array.from({ length: 5 }, () => breakEven()),
     ]);
-    expect(report.overall.winRate).toBe(25);
-    // Half credit for each partial: (5 + 2.5) / 20.
-    expect(report.overall.weightedAccuracy).toBeCloseTo(37.5, 1);
+    expect(report.overall.winRate).toBeCloseTo(33.3, 1);
+    expect(report.overall.weightedAccuracy).toBeCloseTo(33.3, 1);
   });
 
   it("counts a loss that never reached TP1 as an outright failure", () => {
@@ -570,18 +591,19 @@ describe("partial successes", () => {
       outcomeAnalysis: analysis({ win: false, excursion: { ...analysis().excursion, targetProgressPct: 87 } }),
     });
     const report = computePerformance([nearMiss]);
-    expect(report.overall.partials).toBe(0);
+    expect(report.overall.breakEvens).toBe(0);
     expect(report.overall.failed).toBe(1);
   });
 
-  it("attributes partials to the analysts that voted for the signal", () => {
+  it("attributes break-evens to the analysts that voted for the signal", () => {
     const report = computePerformance([
-      partial({ verdicts: [verdict("chart", "long"), abstains("range")] }),
+      breakEven({ verdicts: [verdict("chart", "long"), abstains("range")] }),
     ]);
-    expect(analystOf(report, "chart").partials).toBe(1);
-    expect(analystOf(report, "chart").weightedAccuracy).toBe(50);
-    // The analyst that abstained is charged neither the loss nor the partial.
-    expect(analystOf(report, "range").partials).toBe(0);
+    expect(analystOf(report, "chart").breakEvens).toBe(1);
+    // Nothing decided for this analyst, so no rate is quoted either.
+    expect(analystOf(report, "chart").weightedAccuracy).toBe(0);
+    // The analyst that abstained is charged nothing at all.
+    expect(analystOf(report, "range").breakEvens).toBe(0);
     expect(analystOf(report, "range").totalSignals).toBe(0);
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { classifyBucket, OutcomeBucket } from "@/engines/outcomeBuckets";
+import {
+  classifyBucket,
+  OutcomeBucket,
+  resolvedCount,
+  winRate,
+} from "@/engines/outcomeBuckets";
 
 /**
  * The shadow-recording rule, and the slicing it exists to enable.
@@ -30,19 +35,16 @@ function slice(rows: Row[]) {
   const counts: Record<OutcomeBucket, number> = {
     active: 0,
     successful: 0,
-    partial: 0,
+    breakeven: 0,
     failed: 0,
   };
   for (const r of rows) counts[r.bucket]++;
-  const resolved = counts.successful + counts.partial + counts.failed;
+  const resolved = resolvedCount(counts);
   const closed = rows.filter((r) => r.bucket !== "active" && r.resultPnlPct != null);
   return {
     counts,
     resolved,
-    accuracyPct:
-      resolved >= MIN_SAMPLE
-        ? Number((((counts.successful + counts.partial * 0.5) / resolved) * 100).toFixed(1))
-        : null,
+    accuracyPct: resolved >= MIN_SAMPLE ? winRate(counts) : null,
     avgPnlPct:
       closed.length > 0
         ? Number((closed.reduce((s, x) => s + (x.resultPnlPct ?? 0), 0) / closed.length).toFixed(2))
@@ -70,13 +72,17 @@ describe("shadow and regime slicing", () => {
     expect(s.resolved).toBe(2);
   });
 
-  it("counts a partial as half a success, here as everywhere else", () => {
+  it("keeps break-evens out of the rate, here as everywhere else", () => {
     const rows: Row[] = [
-      ...Array.from({ length: 5 }, () => row("successful", 3)),
-      ...Array.from({ length: 5 }, () => row("partial", -0.2)),
+      ...Array.from({ length: 8 }, () => row("successful", 3)),
+      ...Array.from({ length: 2 }, () => row("failed", -2)),
+      ...Array.from({ length: 9 }, () => row("breakeven", -0.05)),
     ];
-    // 5 + 2.5 out of 10.
-    expect(slice(rows).accuracyPct).toBe(75);
+    // 8 of 10 decided. The nine break-evens move the rate not at all — which
+    // is the point: a trader must not be able to change their measured
+    // accuracy by managing trades differently.
+    expect(slice(rows).accuracyPct).toBe(80);
+    expect(slice(rows).counts.breakeven).toBe(9);
   });
 
   it("withholds a rate below the sample floor but still reports the counts", () => {
@@ -113,7 +119,7 @@ describe("shadow and regime slicing", () => {
       row("successful", 2, false, "risk_on"),
       row("failed", -4, false, "risk_off"),
       row("failed", -3, false, "risk_off"),
-      row("partial", 0, false, null),
+      row("failed", -1, false, null),
     ];
     const regimes = [...new Set(rows.map((r) => r.regime ?? "unknown"))];
     const slices = regimes.map((g) =>
@@ -155,6 +161,7 @@ describe("shadow and regime slicing", () => {
         resultPnlPct: -1,
         outcomeAnalysis: { excursion: { targetProgressPct: 120 } } as never,
       })
-    ).toBe("partial");
+    ).toBe("successful");
+    expect(classifyBucket({ status: "BREAKEVEN", resultPnlPct: -0.02 })).toBe("breakeven");
   });
 });

@@ -30,11 +30,11 @@ export const dynamic = "force-dynamic";
  * filters and the dashboard counts always agree.
  */
 
-type Outcome = "active" | "successful" | "partial" | "failed" | "expired";
+type Outcome = "active" | "successful" | "breakeven" | "failed" | "expired";
 
 function isOutcome(v: string | null): v is Outcome {
   return (
-    v === "active" || v === "successful" || v === "partial" || v === "failed" || v === "expired"
+    v === "active" || v === "successful" || v === "breakeven" || v === "failed" || v === "expired"
   );
 }
 
@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
   const statusFilter: Prisma.SignalWhereInput = outcome
     ? outcome === "active"
       ? { status: { in: [...ACTIVE_STATUSES] } }
-      : outcome === "successful" || outcome === "failed" || outcome === "partial"
+      : outcome === "successful" || outcome === "failed" || outcome === "breakeven"
         ? { status: { in: [...RESOLVED_STATUSES] } }
         : { status: "EXPIRED" }
     : status
@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
   // Post-query filters need headroom; without one, filtering a full page down
   // would silently return fewer rows than asked for.
   const needsPostFilter =
-    Boolean(analyst) || outcome === "successful" || outcome === "failed" || outcome === "partial";
+    Boolean(analyst) || outcome === "successful" || outcome === "failed" || outcome === "breakeven";
   const take = needsPostFilter ? Math.min(600, limit * 6) : limit;
 
   try {
@@ -131,11 +131,12 @@ export async function GET(req: NextRequest) {
 
     let signals = rows;
 
-    if (outcome === "successful" || outcome === "failed" || outcome === "partial") {
+    if (outcome === "successful" || outcome === "failed" || outcome === "breakeven") {
       // Buckets come from the shared classifier so History, the performance
       // service and the dashboard can never disagree about what a signal was.
-      // Note `failed` now EXCLUDES trades that reached TP1 before reversing —
-      // those are `partial`.
+      // Note `successful` means "reached TP1" rather than "closed green", and
+      // `failed` therefore excludes both trades that got there and trades cut
+      // at a protected stop — those are `breakeven`.
       signals = signals.filter(
         (s) =>
           classifyBucket({

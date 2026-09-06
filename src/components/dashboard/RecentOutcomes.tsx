@@ -13,12 +13,12 @@ import { OutcomeAnalysis } from "@/engines/types";
  * classified reason and who was right or wrong, which is the whole point of
  * recording outcomes rather than just P/L.
  */
-export default function RecentOutcomes({ outcome }: { outcome: "successful" | "partial" | "failed" }) {
+export default function RecentOutcomes({ outcome }: { outcome: "successful" | "breakeven" | "failed" }) {
   const { data, loading, error } = useSignals(`outcome=${outcome}&limit=8`, 30_000);
   const open = useOpenInTerminal();
   const signals = data?.signals ?? [];
   const won = outcome === "successful";
-  const partial = outcome === "partial";
+  const partial = outcome === "breakeven";
   const tone = won ? "text-bull" : partial ? "text-neon-amber" : "text-bear";
 
   return (
@@ -28,7 +28,7 @@ export default function RecentOutcomes({ outcome }: { outcome: "successful" | "p
           {won
             ? "Recent Successful Signals"
             : partial
-              ? "Recent Partial Signals"
+              ? "Recent Break-even Signals"
               : "Recent Failed Signals"}
         </span>
       }
@@ -41,7 +41,7 @@ export default function RecentOutcomes({ outcome }: { outcome: "successful" | "p
             : error || data?.warning
               ? `Unavailable — ${error ?? data?.warning}.`
               : partial
-                ? "No signals have reached TP1 and then reversed. Trades either finished green or never got there."
+                ? "No signals have closed at a protected stop yet."
                 : `No ${won ? "winning" : "losing"} signals have resolved yet.`}
         </EmptyNote>
       ) : (

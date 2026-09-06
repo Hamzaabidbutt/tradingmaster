@@ -48,7 +48,10 @@ const ANALYSTS: { key: AnalystKey; name: string; basis: EvidenceBasis }[] = [
  * zero-P/L loss. They belong in `active` until they stop out, reach TP3 or
  * expire.
  */
-const CLOSED_STATUSES = ["TP3_HIT", "STOPPED", "EXPIRED"];
+// BREAKEVEN is a closed status like any other. Omitting it here silently
+// dropped every protected exit out of the report altogether — not counted as a
+// win, not as a loss, not even in the total.
+const CLOSED_STATUSES = ["TP3_HIT", "STOPPED", "EXPIRED", "BREAKEVEN"];
 const ACTIVE_STATUSES = ["ACTIVE", "TP1_HIT", "TP2_HIT"];
 
 /**
@@ -91,7 +94,7 @@ export interface AnalystPerformance {
   wins: number;
   losses: number;
   /** closed red but reached TP1 first — right on direction, wrong on exit */
-  partials: number;
+  breakEvens: number;
   /** null until MIN_SAMPLE attributed signals exist */
   winRate: number | null;
   /** win rate with partials given half credit, 0-100 */
@@ -143,7 +146,7 @@ export interface OverallPerformance {
    * right about direction; filing it beside an outright miss hides the only
    * distinction that matters when reviewing losses.
    */
-  partials: number;
+  breakEvens: number;
   /** closed at or below breakeven without ever reaching the first target */
   failed: number;
   active: number;
@@ -224,27 +227,33 @@ function isWin(s: PerfSignal): boolean {
 }
 
 /**
- * Reached TP1 but closed red — directionally right, managed badly.
+ * Closed at a stop that had already been protected — neither win nor loss.
  *
- * Kept out of `isWin` so P/L-based averages stay honest (these trades really
- * did lose money), but counted separately so accuracy is not understated by
- * lumping them in with calls that were simply wrong.
+ * Kept out of `isWin` because no money was made, and out of the accuracy
+ * denominator because no question was answered: the trade was cut before the
+ * market decided. Reported on its own so active management does not look like
+ * it damages the record.
  */
-function isPartialWin(s: PerfSignal): boolean {
-  return !isWin(s) && classifyBucket(s) === "partial";
+function isBreakEvenTrade(s: PerfSignal): boolean {
+  return classifyBucket(s) === "breakeven";
 }
 
 /**
- * Accuracy that gives partials half credit.
+ * Win rate over decided trades.
  *
- * A plain win rate treats "right, then gave it back" identically to "wrong
- * from the start". Weighting partials at 0.5 separates the two without
- * pretending a red trade was green.
+ * Wins over wins-plus-losses. Break-evens are removed from the denominator
+ * rather than scored zero — a trade that was protected and retraced says
+ * nothing about whether the read was right, and burying it in the rate as a
+ * loss would penalise the management that saved it.
  */
 function weightedAccuracy(signals: PerfSignal[]): number {
-  if (signals.length === 0) return 0;
-  const score = signals.reduce((sum, s) => sum + bucketScore(classifyBucket(s)), 0);
-  return Number(((score / signals.length) * 100).toFixed(1));
+  const decided = signals.filter((s) => {
+    const b = classifyBucket(s);
+    return b === "successful" || b === "failed";
+  });
+  if (decided.length === 0) return 0;
+  const score = decided.reduce((sum, s) => sum + bucketScore(classifyBucket(s)), 0);
+  return Number(((score / decided.length) * 100).toFixed(1));
 }
 
 function isClosed(s: PerfSignal): boolean {
@@ -385,14 +394,19 @@ function analystPerformance(
   closed: PerfSignal[]
 ): AnalystPerformance {
   const mine = closed.filter((s) => supported(s, spec.key));
-  const wins = mine.filter(isWin);
-  const losses = mine.filter((s) => !isWin(s));
-  const partials = mine.filter(isPartialWin);
+  /* Buckets come from the shared classifier, not from a local P/L test. A
+     signal that reached TP1 is successful even if it closed red — that is the
+     app-wide rule, and computing it differently here is how the analytics page
+     ends up disagreeing with Signal History about the same trade. */
+  const wins = mine.filter((s) => classifyBucket(s) === "successful");
+  const losses = mine.filter((s) => classifyBucket(s) === "failed");
+  const breakEvens = mine.filter(isBreakEvenTrade);
 
+  const decided = wins.length + losses.length;
   const longs = mine.filter((s) => s.side === "BUY");
   const shorts = mine.filter((s) => s.side === "SELL");
-  const longWins = longs.filter(isWin);
-  const shortWins = shorts.filter(isWin);
+  const longWins = longs.filter((s) => classifyBucket(s) === "successful");
+  const shortWins = shorts.filter((s) => classifyBucket(s) === "successful");
 
   const abstained = closed.filter((s) => {
     const v = verdictOf(s, spec.key);
@@ -413,8 +427,9 @@ function analystPerformance(
     totalSignals: mine.length,
     wins: wins.length,
     losses: losses.length,
-    partials: partials.length,
-    winRate: rate(wins.length, mine.length),
+    breakEvens: breakEvens.length,
+    // Over decided trades only — break-evens are not in the denominator.
+    winRate: rate(wins.length, decided),
     weightedAccuracy: weightedAccuracy(mine),
     longWins: longWins.length,
     longLosses: longs.length - longWins.length,
@@ -442,9 +457,10 @@ function analystPerformance(
 /** Pure: same rows in, same report out. No I/O, no clock beyond the rows. */
 export function computePerformance(signals: PerfSignal[]): PerformanceReport {
   const closed = signals.filter(isClosed);
-  const wins = closed.filter(isWin);
-  const losses = closed.filter((s) => !isWin(s));
-  const partials = closed.filter(isPartialWin);
+  const wins = closed.filter((s) => classifyBucket(s) === "successful");
+  const losses = closed.filter((s) => classifyBucket(s) === "failed");
+  const breakEvens = closed.filter(isBreakEvenTrade);
+  const decided = wins.length + losses.length;
 
   const longs = closed.filter((s) => s.side === "BUY");
   const shorts = closed.filter((s) => s.side === "SELL");
@@ -464,13 +480,13 @@ export function computePerformance(signals: PerfSignal[]): PerformanceReport {
     overall: {
       totalSignals: signals.length,
       successful: wins.length,
-      partials: partials.length,
-      // Partials are removed from the failure count, not double-counted:
-      // successful + partials + failed === closed.
-      failed: losses.length - partials.length,
+      breakEvens: breakEvens.length,
+      failed: losses.length,
       active: signals.filter((s) => ACTIVE_STATUSES.includes(s.status)).length,
       expired: signals.filter((s) => s.status === "EXPIRED").length,
-      winRate: rate(wins.length, closed.length),
+      // Wins over wins-plus-losses. Break-evens resolved without answering the
+      // question the rate asks, so they are reported beside it, never inside.
+      winRate: rate(wins.length, decided),
       weightedAccuracy: weightedAccuracy(closed),
       longSignals: longs.length,
       shortSignals: shorts.length,

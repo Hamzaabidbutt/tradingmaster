@@ -3,32 +3,44 @@ import { OutcomeAnalysis } from "./types";
 /**
  * The single definition of "how did this signal end".
  *
- * Signal History, the performance service and the dashboard counters all need
- * the same answer, and three copies of the rule drifted apart the moment one
- * of them changed. This module owns it.
+ * Signal History, the performance service, the record page and the dashboard
+ * counters all need the same answer, and three copies of the rule drifted apart
+ * the moment one of them changed. This module owns it.
  *
  * The buckets:
  *
- *   active      — still running (ACTIVE, TP1_HIT, TP2_HIT). A partial fill is
- *                 not an outcome; the position is open.
- *   successful  — closed with a positive realised P/L.
- *   partial     — closed at or below breakeven, BUT the trade reached its first
- *                 target before reversing.
- *   failed      — closed at or below breakeven without ever reaching TP1.
+ *   active      — still running. A position with a target tagged is still open.
+ *   successful  — reached its first target at any point. The call was right and
+ *                 the first target paid; what happened to the remainder is a
+ *                 management question, not a question about the read.
+ *   breakeven   — closed at a stop that had already been moved to entry or
+ *                 better, without reaching TP1. Neither a win nor a loss.
+ *   failed      — closed without reaching TP1 and without that protection.
  *
- * `partial` exists because collapsing it into `failed` misrepresents both the
- * signal and the trader. A call that ran to its first target was directionally
- * right; giving the move back is a management outcome, not a bad read. Counting
- * those as outright failures understates the engine's accuracy and hides the
- * distinction that actually matters when reviewing losses — "wrong about
- * direction" versus "right, then held too long".
+ * ## Why breakeven is its own bucket
+ *
+ * Because it is genuinely neither outcome, and forcing it into either one
+ * lies in a specific direction. Counted as a loss, active management looks
+ * like it damages the record — every trade saved from a full stop becomes a
+ * mark against the engine. Counted as a win, the record fills with trades that
+ * made nothing. It is excluded from the win rate entirely and reported beside
+ * it, so the denominator only ever contains trades that actually resolved one
+ * way or the other.
+ *
+ * ## Why TP1 is the bar for success
+ *
+ * The first target is what the signal is really claiming: that price will move
+ * a stated distance in a stated direction before the invalidation level. Once
+ * the stop is moved to break-even at TP1, a trade that reaches it cannot become
+ * a loss — so "reached TP1" and "did not lose" are the same event, and the
+ * former is the honest way to describe it.
  */
 
-export type OutcomeBucket = "active" | "successful" | "partial" | "failed";
+export type OutcomeBucket = "active" | "successful" | "breakeven" | "failed";
 
 export const ACTIVE_STATUSES = ["ACTIVE", "TP1_HIT", "TP2_HIT"] as const;
 /** Statuses that end a signal and carry a realised P/L. */
-export const RESOLVED_STATUSES = ["TP3_HIT", "STOPPED", "EXPIRED"] as const;
+export const RESOLVED_STATUSES = ["TP3_HIT", "STOPPED", "EXPIRED", "BREAKEVEN"] as const;
 
 export interface BucketInput {
   status: string;
@@ -49,7 +61,7 @@ export function isActiveStatus(status: string): boolean {
  *
  * Returns false when the figure is unknown (legacy rows, or a signal that
  * quoted no first target). Unknown must not be treated as "reached", or every
- * pre-migration loss would be relabelled a partial success.
+ * pre-migration loss would be relabelled a success.
  */
 export function reachedFirstTarget(signal: BucketInput): boolean {
   // TP3 can only be tagged by passing through TP1, whatever the analysis says.
@@ -60,31 +72,51 @@ export function reachedFirstTarget(signal: BucketInput): boolean {
 
 export function classifyBucket(signal: BucketInput): OutcomeBucket {
   if (isActiveStatus(signal.status)) return "active";
+  // Reaching the first target is the claim the signal actually made, so it
+  // outranks the closing price: a trade that ran to TP1 and was then walked
+  // out at break-even was a correct call, managed.
+  if (reachedFirstTarget(signal)) return "successful";
+  if (signal.status === "BREAKEVEN") return "breakeven";
   if ((signal.resultPnlPct ?? 0) > 0) return "successful";
-  return reachedFirstTarget(signal) ? "partial" : "failed";
+  return "failed";
 }
 
 /** Convenience predicates, so call sites read as prose. */
 export const isSuccessful = (s: BucketInput) => classifyBucket(s) === "successful";
-export const isPartial = (s: BucketInput) => classifyBucket(s) === "partial";
+export const isBreakEven = (s: BucketInput) => classifyBucket(s) === "breakeven";
 export const isFailed = (s: BucketInput) => classifyBucket(s) === "failed";
 
 /**
  * Weighted score for accuracy reporting.
  *
- * A partial counts as half a win: the direction was right and the first target
- * paid, but the trade did not finish green. Scoring it 1.0 would flatter the
- * engine; scoring it 0 would punish a correct call for a management error.
+ * Only wins score. Break-evens are removed from the denominator rather than
+ * scored zero — see `resolvedCount`, which is the divisor every rate here
+ * should use.
  */
 export function bucketScore(bucket: OutcomeBucket): number {
-  if (bucket === "successful") return 1;
-  if (bucket === "partial") return 0.5;
-  return 0;
+  return bucket === "successful" ? 1 : 0;
+}
+
+/**
+ * The denominator for every win rate in the app.
+ *
+ * Wins plus losses, and nothing else. Break-evens resolved without resolving
+ * the question the rate is asking, and running trades have not resolved at all.
+ */
+export function resolvedCount(counts: Record<OutcomeBucket, number>): number {
+  return counts.successful + counts.failed;
+}
+
+/** Win rate over decided trades, or null when none have decided. */
+export function winRate(counts: Record<OutcomeBucket, number>): number | null {
+  const decided = resolvedCount(counts);
+  if (decided === 0) return null;
+  return Number(((counts.successful / decided) * 100).toFixed(1));
 }
 
 export const BUCKET_LABEL: Record<OutcomeBucket, string> = {
   active: "Running",
-  successful: "Successful",
-  partial: "Partial — reached TP1, then reversed",
+  successful: "Successful — reached TP1",
+  breakeven: "Break-even — protected, then retraced",
   failed: "Failed",
 };

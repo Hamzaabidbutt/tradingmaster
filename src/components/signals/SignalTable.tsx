@@ -34,7 +34,7 @@ import {
  * hide that.
  */
 
-type Bucket = "active" | "successful" | "partial" | "failed" | "expired";
+type Bucket = "active" | "successful" | "breakeven" | "failed" | "expired";
 
 function bucketOf(s: SignalRow): Bucket {
   const bucket = classifyBucket({
@@ -52,7 +52,7 @@ function bucketOf(s: SignalRow): Bucket {
 const BUCKET_STYLE: Record<Bucket, string> = {
   active: "border-neon-cyan/30 bg-neon-cyan/10 text-neon-cyan",
   successful: "border-bull/35 bg-bull/10 text-bull",
-  partial: "border-amber-400/35 bg-amber-400/10 text-amber-300",
+  breakeven: "border-amber-400/35 bg-amber-400/10 text-amber-300",
   failed: "border-bear/35 bg-bear/10 text-bear",
   expired: "border-slate-500/30 bg-slate-500/10 text-slate-400",
 };

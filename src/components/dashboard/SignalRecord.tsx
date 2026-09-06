@@ -58,14 +58,14 @@ interface RecordReport {
 const BUCKET_STYLE: Record<OutcomeBucket, string> = {
   active: "bg-white/5 text-slate-400",
   successful: "bg-bull/15 text-bull",
-  partial: "bg-neon-amber/15 text-neon-amber",
+  breakeven: "bg-neon-amber/15 text-neon-amber",
   failed: "bg-bear/15 text-bear",
 };
 
 const BUCKET_LABEL: Record<OutcomeBucket, string> = {
   active: "Running",
   successful: "Successful",
-  partial: "Partial",
+  breakeven: "Break-even",
   failed: "Failed",
 };
 
@@ -145,22 +145,19 @@ export default function SignalRecord({
         <>
           <div className="grid grid-cols-4 gap-1.5">
             <Tile label="Successful" value={counts.successful} tone="successful" />
-            <Tile label="Partial" value={counts.partial} tone="partial" />
+            <Tile label="Break-even" value={counts.breakeven} tone="breakeven" />
             <Tile label="Failed" value={counts.failed} tone="failed" />
             <Tile label="Running" value={counts.active} tone="active" />
           </div>
 
-          {/* Proportional bar over resolved signals only — running positions
-              are not an outcome and must not pad the denominator. */}
+          {/* Proportional bar over decided signals only. Break-evens are
+              drawn but sit outside the win/loss split they are not part of,
+              which is the visual form of excluding them from the rate. */}
           {data!.resolved > 0 && (
             <div className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-white/5">
               <div
                 className="bg-bull"
                 style={{ width: `${(counts.successful / data!.resolved) * 100}%` }}
-              />
-              <div
-                className="bg-neon-amber"
-                style={{ width: `${(counts.partial / data!.resolved) * 100}%` }}
               />
               <div
                 className="bg-bear"
@@ -408,7 +405,8 @@ function Level({
  * floor rather than printing a number computed from three trades.
  */
 function SliceRow({ slice: sl, muted }: { slice: RecordSlice; muted?: boolean }) {
-  const total = sl.counts.successful + sl.counts.partial + sl.counts.failed + sl.counts.active;
+  const total =
+    sl.counts.successful + sl.counts.breakeven + sl.counts.failed + sl.counts.active;
   return (
     <div
       className={`rounded border border-white/5 bg-white/[0.02] px-2 py-1.5 ${muted ? "opacity-70" : ""}`}
@@ -435,7 +433,7 @@ function SliceRow({ slice: sl, muted }: { slice: RecordSlice; muted?: boolean })
       {total > 0 && (
         <div className="mt-1 flex flex-wrap gap-x-2 font-mono text-[9px]">
           <span className="text-bull">{sl.counts.successful} ok</span>
-          <span className="text-neon-amber">{sl.counts.partial} partial</span>
+          <span className="text-neon-amber">{sl.counts.breakeven} break-even</span>
           <span className="text-bear">{sl.counts.failed} failed</span>
           <span className="text-slate-500">{sl.counts.active} running</span>
         </div>

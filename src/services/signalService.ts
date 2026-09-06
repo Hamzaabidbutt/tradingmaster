@@ -7,6 +7,7 @@ import { STRATEGIES } from "@/engines/strategies";
 import { buildTradeRetrospective, computeWeightAdjustments } from "@/engines/learning";
 import { buildVerdicts } from "@/engines/confluence";
 import { classifyOutcome, computeExcursion, OutcomeSignal } from "@/engines/outcome";
+import { isBreakEvenExit, manageTrade, ManagedPosition } from "@/engines/tradeManagement";
 import { getMarketRegime } from "./regimeService";
 import {
   AnalystVerdict,
@@ -533,7 +534,28 @@ export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed
       const price = ticker.lastPrice;
       const isBuy = sig.side === "BUY";
 
-      const hitSL = isBuy ? price <= sig.stopLoss : price >= sig.stopLoss;
+      /* Management runs before the exit checks, and against the *managed*
+         stop rather than the original. A stop that has been pulled to
+         break-even is the stop that is actually in force; testing the opening
+         stop would let a protected trade run all the way back to its original
+         risk. */
+      const bars = await fetchKlines(sig.symbol, sig.timeframe, 200).catch(() => []);
+      const position: ManagedPosition = {
+        side: sig.side as "BUY" | "SELL",
+        entry: sig.entry,
+        stopLoss: sig.stopLoss,
+        tp1: sig.tp1,
+        tp2: sig.tp2,
+        tp3: sig.tp3,
+        managedStop: sig.managedStop,
+        status: sig.status,
+        openedAt: Math.floor(sig.createdAt.getTime() / 1000),
+        estHoldingMin: sig.estHoldingMin,
+      };
+      const managed = manageTrade(position, price, bars);
+      const activeStop = managed.stop;
+
+      const hitSL = isBuy ? price <= activeStop : price >= activeStop;
       const hitTP3 = isBuy ? price >= sig.tp3 : price <= sig.tp3;
       const hitTP2 = isBuy ? price >= sig.tp2 : price <= sig.tp2;
       const hitTP1 = isBuy ? price >= sig.tp1 : price <= sig.tp1;
@@ -543,13 +565,29 @@ export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed
 
       let newStatus = sig.status;
       let finished = false;
-      if (hitSL) { newStatus = "STOPPED"; finished = true; }
-      else if (hitTP3) { newStatus = "TP3_HIT"; finished = true; }
+      let earlyExitReason: string | null = null;
+      if (hitSL) {
+        // A stop that had been moved to entry or better is a break-even exit,
+        // not a loss — the trade was protected and then retraced.
+        newStatus = isBreakEvenExit(position, sig.managedStop ?? activeStop, price)
+          ? "BREAKEVEN"
+          : "STOPPED";
+        finished = true;
+      } else if (hitTP3) { newStatus = "TP3_HIT"; finished = true; }
+      else if (managed.exit) {
+        // The point of item two: do not wait for the stop once the read has
+        // been refuted. Recorded with its reason so the record can measure
+        // whether cutting early actually helped.
+        newStatus = "STOPPED";
+        finished = true;
+        earlyExitReason = managed.exit.reason;
+      }
       else if (hitTP2) { newStatus = "TP2_HIT"; }
       else if (hitTP1) { newStatus = "TP1_HIT"; }
       else if (expired) { newStatus = "EXPIRED"; finished = true; }
 
-      if (newStatus === sig.status && !finished) continue;
+      const stopChanged = managed.moved && !finished;
+      if (newStatus === sig.status && !finished && !stopChanged) continue;
 
       const pnlPct = ((price - sig.entry) / sig.entry) * 100 * (isBuy ? 1 : -1);
 
@@ -557,10 +595,32 @@ export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed
       // call, and a signal that is merely progressing has no outcome yet.
       const outcome = finished ? await analyseClosedSignal(sig, newStatus, pnlPct) : null;
 
+      const priorLog = Array.isArray(sig.managementLog) ? (sig.managementLog as unknown[]) : [];
+      const logEntry =
+        managed.moved || managed.exit
+          ? [
+              {
+                at: new Date().toISOString(),
+                price,
+                stage: managed.stage,
+                stop: managed.stop,
+                progressToTp1: managed.progressToTp1,
+                riskUsed: managed.riskUsed,
+                notes: managed.notes,
+              },
+            ]
+          : [];
+
       await prisma.signal.update({
         where: { id: sig.id },
         data: {
           status: newStatus,
+          managedStop: managed.stop,
+          managementStage: managed.stage,
+          ...(logEntry.length > 0
+            ? { managementLog: [...priorLog, ...logEntry] as unknown as object }
+            : {}),
+          ...(earlyExitReason ? { earlyExitReason } : {}),
           ...(finished
             ? { closedAt: new Date(), closedPrice: price, resultPnlPct: Number(pnlPct.toFixed(3)) }
             : {}),
@@ -579,7 +639,7 @@ export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed
         // are for — but they were never taken, so they never alert.
         await recordLearning(sig.id, sig.side as "BUY" | "SELL", pnlPct, sig.strategyScores as unknown as StrategyScore[]);
         if (!sig.shadow) await dispatchAlert({
-          title: `${sig.symbol} ${sig.side} ${newStatus === "STOPPED" ? "stopped out" : newStatus === "EXPIRED" ? "expired" : "hit final target"}`,
+          title: `${sig.symbol} ${sig.side} ${newStatus === "BREAKEVEN" ? "closed at break-even" : newStatus === "STOPPED" ? (earlyExitReason ? `cut early (${earlyExitReason})` : "stopped out") : newStatus === "EXPIRED" ? "expired" : "hit final target"}`,
           body: [
             `Result: ${pnlPct.toFixed(2)}% | Entry ${sig.entry} → ${price}`,
             ...(outcome ? [`${outcome.reasonLabel}. ${outcome.detail[0] ?? ""}`] : []),
