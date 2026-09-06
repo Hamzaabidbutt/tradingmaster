@@ -74,12 +74,12 @@ export default function AnalystPerformanceCard() {
                 >
                   avg {fmtMean(a.avgReturnPct, a.totalSignals)}
                 </span>
-                {a.partials > 0 && (
+                {a.breakEvens > 0 && (
                   <span
                     className="text-neon-amber/80"
                     title="Reached the first target, then closed at or below breakeven. Counted at half credit in weighted accuracy."
                   >
-                    {a.partials} partial · wtd {a.weightedAccuracy.toFixed(0)}%
+                    {a.breakEvens} break-even · wtd {a.weightedAccuracy.toFixed(0)}%
                   </span>
                 )}
               </div>

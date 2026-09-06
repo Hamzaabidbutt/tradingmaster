@@ -63,7 +63,7 @@ export default function PerformanceStrip({
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
           <StatChip label="Total signals" value={o.totalSignals} />
           <StatChip label="Successful" value={o.successful} tone="bull" />
-          <StatChip label="Partial" value={o.partials} tone="amber" />
+          <StatChip label="Break-even" value={o.breakEvens} tone="amber" />
           <StatChip label="Failed" value={o.failed} tone="bear" />
           <StatChip label="Active" value={o.active} tone="cyan" />
           <StatChip label="Win rate" value={fmtRate(o.winRate)} tone={rateTone(o.winRate)} />
@@ -79,10 +79,10 @@ export default function PerformanceStrip({
           />
           <StatChip
             label="Avg loss"
-            // Every red trade, partials included — they really did lose money,
+            // Every red trade, break-evens included — they really did close
             // which is exactly why they are kept out of the win rate.
-            value={fmtMean(o.avgLossPct, o.failed + o.partials)}
-            tone={o.failed + o.partials > 0 ? "bear" : "neutral"}
+            value={fmtMean(o.avgLossPct, o.failed + o.breakEvens)}
+            tone={o.failed + o.breakEvens > 0 ? "bear" : "neutral"}
           />
           <StatChip
             label="Best strategy"

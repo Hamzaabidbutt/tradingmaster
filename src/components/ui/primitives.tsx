@@ -120,3 +120,72 @@ export function timeAgo(unixSec: number): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 }
+
+/**
+ * Wall-clock time in the reader's own zone.
+ *
+ * "4m ago" answers freshness; it does not answer *when*, and those are
+ * different questions. A scanner result that says only "12m ago" cannot be
+ * lined up against a chart, a funding settlement or a session boundary — all
+ * of which the reader thinks about in their own clock, while every exchange
+ * figure in the app is UTC.
+ */
+export function localTime(unixSec: number): string {
+  return new Date(unixSec * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+/** Local date and time, for anything that may not be from today. */
+export function localStamp(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/** The reader's timezone abbreviation, e.g. "GMT+5". */
+export function localZone(): string {
+  try {
+    const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(
+      new Date()
+    );
+    return parts.find((p) => p.type === "timeZoneName")?.value ?? "local";
+  } catch {
+    return "local";
+  }
+}
+
+/**
+ * The local time of the bar a scanner row was read from.
+ *
+ * Distinct from the scan timestamp in the header: that says when the sweep
+ * ran, this says how old the data under *this row* is, and the two differ
+ * whenever a symbol sits on a slow timeframe. A 4h read taken thirty seconds
+ * ago can still be built on a bar that opened three hours back.
+ */
+export function BarClock({ at, timeframe }: { at?: number; timeframe?: string }) {
+  if (!at) return null;
+  return (
+    <span
+      className="font-mono text-[9px] text-slate-600"
+      title={`Last closed ${timeframe ?? ""} bar opened ${localStamp(at)} (${localZone()})`}
+    >
+      {localTime(at)}
+    </span>
+  );
+}
+
+/**
+ * When a scan ran, both ways: how long ago, and at what time on the reader's
+ * own clock. Used in every scanner header so the two never drift apart.
+ */
+export function ScanTimestamp({ at, label = "scanned" }: { at: number; label?: string }) {
+  if (!at) return null;
+  return (
+    <span title={`${label} at ${localStamp(at)} (${localZone()})`}>
+      {timeAgo(at)}
+      <span className="ml-1 font-mono text-slate-500">· {localTime(at)}</span>
+    </span>
+  );
+}

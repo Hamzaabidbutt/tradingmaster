@@ -184,6 +184,7 @@ async function scanUniverseSlice(): Promise<void> {
         symbol: r.symbol,
         label: r.label,
         timeframe: SCAN_TIMEFRAME,
+        barTime: setup.generatedAt,
         quoteVolume: r.quoteVolume,
         priceChangePercent: r.priceChangePercent,
         setup,

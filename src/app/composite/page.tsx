@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import SignalRecord from "@/components/dashboard/SignalRecord";
-import { GlassCard, timeAgo } from "@/components/ui/primitives";
+import { BarClock, GlassCard, ScanTimestamp } from "@/components/ui/primitives";
 import {
   EmptyNote,
   ScanTimeframe,
@@ -20,6 +20,8 @@ interface Entry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /** open time of the last closed bar this read used, unix seconds */
+  barTime: number;
   price: number;
   bias: Bias;
   bullishProbability: number;
@@ -101,7 +103,7 @@ export default function CompositePage() {
               🧮 Composite signal scanner
               {data && (
                 <span className="font-mono text-[10px] font-normal text-slate-500">
-                  {long.length + short.length} setups · {data.scanned} coins · {timeAgo(data.scannedAt)}
+                  {long.length + short.length} setups · {data.scanned} coins · <ScanTimestamp at={data.scannedAt} />
                   {data.failed > 0 && ` · ${data.failed} failed`}
                 </span>
               )}
@@ -294,6 +296,7 @@ function Row({
           <span className="text-xs font-semibold text-slate-200">
             {entry.symbol.replace(/USDT$/, "/USDT")}
           </span>
+          <BarClock at={entry.barTime} timeframe={"timeframe" in entry ? entry.timeframe : undefined} />
           {s && (
             <>
               <span

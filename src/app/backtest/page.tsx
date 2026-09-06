@@ -5,6 +5,7 @@ import AppShell from "@/components/layout/AppShell";
 import { GlassCard, StatChip } from "@/components/ui/primitives";
 import { MARKETS, TIMEFRAMES } from "@/lib/config";
 import { BacktestMetrics } from "@/engines/types";
+import StrategyLeaderboard from "@/components/dashboard/StrategyLeaderboard";
 
 interface SavedBacktest {
   id: string;
@@ -73,6 +74,14 @@ export default function BacktestPage() {
     <AppShell>
       <div className="mx-auto max-w-6xl space-y-3 p-4">
         <h1 className="text-lg font-bold">Strategy Backtesting</h1>
+
+        {/* The leaderboard leads, because "which strategy is best" is the
+            question people arrive with. The single-strategy runner below it
+            answers the follow-up — "show me that one in detail" — and shares
+            the same engine, so the two can never disagree. */}
+        <div className="h-[620px]">
+          <StrategyLeaderboard />
+        </div>
 
         <GlassCard className="p-4">
           <div className="flex flex-wrap items-end gap-3">

@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
-import { GlassCard, timeAgo } from "@/components/ui/primitives";
+import { BarClock, GlassCard, ScanTimestamp } from "@/components/ui/primitives";
 import {
   EmptyNote,
   ScanTimeframe,
@@ -18,6 +18,8 @@ interface Entry {
   timeframe: string;
   quoteVolume: number;
   priceChangePercent: number | null;
+  /** open time of the last closed bar this read used, unix seconds */
+  barTime: number;
   setup: EngulfingSetup;
 }
 
@@ -87,7 +89,7 @@ export default function EngulfingPage() {
               🟩 Engulfing scanner
               {data && (
                 <span className="font-mono text-[10px] font-normal text-slate-500">
-                  {confirmed.length} confirmed · {data.scanned} scanned · {timeAgo(data.scannedAt)}
+                  {confirmed.length} confirmed · {data.scanned} scanned · <ScanTimestamp at={data.scannedAt} />
                 </span>
               )}
             </span>
@@ -223,6 +225,7 @@ function Row({
           <span className="text-xs font-semibold text-slate-200">
             {entry.symbol.replace(/USDT$/, "/USDT")}
           </span>
+          <BarClock at={entry.barTime} timeframe={"timeframe" in entry ? entry.timeframe : undefined} />
           <span
             className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${gradeColor}`}
           >

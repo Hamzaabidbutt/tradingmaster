@@ -79,7 +79,7 @@ export default function DashboardPage() {
             difference between a bad read and a bad exit. */}
         <div className="grid gap-3 lg:grid-cols-3">
           <RecentOutcomes outcome="successful" />
-          <RecentOutcomes outcome="partial" />
+          <RecentOutcomes outcome="breakeven" />
           <RecentOutcomes outcome="failed" />
         </div>
       </div>
