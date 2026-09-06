@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { GlassCard, StatChip } from "@/components/ui/primitives";
+import PostMortemCard from "@/components/dashboard/PostMortemCard";
 
 interface Bucket {
   total: number;
@@ -113,6 +114,15 @@ export default function AnalyticsPage() {
             </div>
           )}
         </GlassCard>
+
+        {/* The post-mortem sits last because it is the conclusion drawn from
+            everything above it: not what the record says, but what to change
+            because of it. Tall and scrollable — on a young record most of it
+            is the list of questions there is not yet enough data to answer,
+            and that is the honest state rather than a gap to fill. */}
+        <div className="h-[760px]">
+          <PostMortemCard />
+        </div>
       </div>
     </AppShell>
   );
