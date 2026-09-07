@@ -794,23 +794,36 @@ export default function TradingChart({
       }
     }
     if (overlays.orderFlowEvents) {
+      /* Absorption, named by which side got absorbed rather than by which
+         side was passive.
+
+         `side` on the event is the *passive* side — whoever was resting. So
+         `buy` means resting bids ate the selling: SUPPLY absorbed, and
+         bullish. `sell` means resting offers ate the buying: DEMAND absorbed,
+         and bearish. "ABS" alone left the reader to work that inversion out
+         from a one-word label, which nobody does mid-chart. */
       for (const a of analysis.orderFlowEvents.absorptions.slice(-4)) {
+        const supplyAbsorbed = a.side === "buy";
         out.push({
           time: a.time as UTCTimestamp,
-          position: a.side === "buy" ? "belowBar" : "aboveBar",
-          color: "#22d3ee",
+          position: supplyAbsorbed ? "belowBar" : "aboveBar",
+          color: supplyAbsorbed ? "#22d3ee" : "#f0abfc",
           shape: "circle",
-          text: `ABS${a.atKeyLevel ? "★" : ""}`,
+          text: `${supplyAbsorbed ? "SUPPLY" : "DEMAND"} ABSORBED${a.atKeyLevel ? " ★" : ""}`,
           size: a.atKeyLevel ? 2 : 1,
         });
       }
-      for (const e of analysis.orderFlowEvents.exhaustions.slice(-2)) {
+      /* Exhaustion, named by which side ran out. `side` is the side losing
+         steam, so `buy` is buyers exhausted — printed above the bar because
+         that is where it matters, at a high. */
+      for (const e of analysis.orderFlowEvents.exhaustions.slice(-3)) {
+        const buyersDone = e.side === "buy";
         out.push({
           time: e.time as UTCTimestamp,
-          position: e.side === "buy" ? "aboveBar" : "belowBar",
-          color: "#fb923c",
+          position: buyersDone ? "aboveBar" : "belowBar",
+          color: buyersDone ? "#fb923c" : "#a3e635",
           shape: "square",
-          text: "EXH",
+          text: `${buyersDone ? "BUYERS" : "SELLERS"} EXHAUSTED`,
           size: 1,
         });
       }
@@ -820,7 +833,7 @@ export default function TradingChart({
           position: t.side === "buyers" ? "aboveBar" : "belowBar",
           color: "#f472b6",
           shape: t.side === "buyers" ? "arrowDown" : "arrowUp",
-          text: "TRAP",
+          text: `${t.side === "buyers" ? "BUYERS" : "SELLERS"} TRAPPED`,
           size: 2,
         });
       }
@@ -919,6 +932,20 @@ export default function TradingChart({
           d.side === "buy" ? "rgba(0,229,160,0.35)" : "rgba(255,77,109,0.35)",
           `Δ spike`,
           LineStyle.Dotted
+        );
+      }
+      /* Absorption as a level, not just a marker. The marker says it happened
+         on that bar; the line says at what price — and price is the part that
+         matters, because resting size that ate one push tends to still be
+         there for the next one. */
+      for (const a of analysis.orderFlowEvents.absorptions.slice(-3)) {
+        const supplyAbsorbed = a.side === "buy";
+        add(
+          a.price,
+          supplyAbsorbed ? "rgba(34,211,238,0.5)" : "rgba(240,171,252,0.5)",
+          supplyAbsorbed ? "SUPPLY ABS" : "DEMAND ABS",
+          LineStyle.Dashed,
+          a.atKeyLevel ? 2 : 1
         );
       }
     }

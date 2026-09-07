@@ -75,15 +75,22 @@ function Body({ report: r }: { report: FundingReport }) {
         </div>
       </div>
 
+      {/* Two sentences, deliberately separate. The first is mechanical — at a
+          positive rate longs literally pay, and that is not an opinion. The
+          second is the interpretation, and it is measured against the
+          interest-rate anchor rather than against zero, which is what stops a
+          rate sitting on its own floor from reading as a crowded long. */}
       <p className={`text-[10px] leading-relaxed ${payerTone}`}>
         {r.payer === "longs"
-          ? "Longs are paying shorts. The crowd is positioned long and is charged for it every settlement."
+          ? "Longs pay shorts at this rate."
           : r.payer === "shorts"
-            ? "Shorts are paying longs. The crowd is positioned short and is charged for it every settlement."
+            ? "Shorts pay longs at this rate."
             : r.payer === "balanced"
-              ? "Funding is flat — neither side is paying meaningfully to hold, so there is no crowded cohort here."
+              ? "The rate is flat — effectively nothing changes hands."
               : "No live rate available for this contract."}
       </p>
+
+      <BiasBanner bias={r.bias} />
 
       {/* The two components of the rate, side by side. */}
       <div className="grid grid-cols-2 gap-2">
@@ -103,6 +110,20 @@ function Body({ report: r }: { report: FundingReport }) {
           value={pct(r.annualisedPct, 1)}
           tone={payerTone}
           hint="The current rate quoted per year at the observed settlement cadence. It assumes the rate persists, which it will not — this is a cost expressed per year, not a forecast of one."
+        />
+        <Cell
+          label="Excess over anchor"
+          value={pct(r.excessAnnualisedPct, 1)}
+          tone={
+            r.excessAnnualisedPct == null
+              ? ""
+              : Math.abs(r.excessAnnualisedPct) < 6
+                ? "text-slate-400"
+                : r.excessAnnualisedPct > 0
+                  ? "text-bear"
+                  : "text-bull"
+          }
+          hint="Funding minus the interest-rate anchor, annualised. This is the part that carries information: the raw rate includes a fixed floor that longs pay whether or not anyone is crowded, and subtracting it is what makes the number mean something."
         />
         <Cell
           label="Paid this window"
@@ -190,6 +211,63 @@ function History({ points }: { points: { time: number; rate: number }[] }) {
         <span className="text-bull/60">▼ shorts pay</span>
         <span>now</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The positioning read, stated plainly at the top of the box.
+ *
+ * Colour follows the label rather than the sign of the rate, because those
+ * come apart at the extremes: heavily positive funding is a *bearish* read,
+ * and painting it green because longs are paying would say the opposite of
+ * what the text says.
+ */
+function BiasBanner({ bias }: { bias: FundingReport["bias"] }) {
+  const tone =
+    bias.label === "bullish"
+      ? { border: "border-bull/30", bg: "bg-bull/5", text: "text-bull" }
+      : bias.label === "bearish"
+        ? { border: "border-bear/30", bg: "bg-bear/5", text: "text-bear" }
+        : { border: "border-white/10", bg: "bg-white/[0.02]", text: "text-slate-300" };
+
+  return (
+    <div className={`rounded-lg border ${tone.border} ${tone.bg} px-2.5 py-2`}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span
+          className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${tone.text} bg-white/5`}
+        >
+          {bias.label}
+        </span>
+        {bias.mode !== "none" && (
+          <span
+            className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-slate-400"
+            title={
+              bias.mode === "contrarian"
+                ? "The crowd is so heavily positioned that it is the risk rather than the confirmation — this reading fades them."
+                : "The cost is manageable, so funding confirms the crowd's lean rather than contradicting it."
+            }
+          >
+            {bias.mode}
+          </span>
+        )}
+        <span className="text-[9px] uppercase tracking-wider text-slate-500">{bias.strength}</span>
+        {bias.excessAnnualisedPct != null && (
+          <span
+            className="ml-auto font-mono text-[9px] text-slate-500"
+            title="Funding minus the interest-rate anchor, annualised"
+          >
+            {bias.excessAnnualisedPct >= 0 ? "+" : ""}
+            {bias.excessAnnualisedPct}% vs anchor
+          </span>
+        )}
+      </div>
+      <div className={`mt-1 text-[11px] font-semibold ${tone.text}`}>{bias.headline}</div>
+      <p className="mt-0.5 text-[10px] leading-relaxed text-slate-400">{bias.detail}</p>
+      <p className="mt-1 text-[9px] leading-relaxed text-slate-600">
+        This is a read on <em>positioning</em>, not a price forecast. Funding says where the
+        leverage sits and what it costs to hold — never when, or whether, that leverage unwinds.
+      </p>
     </div>
   );
 }

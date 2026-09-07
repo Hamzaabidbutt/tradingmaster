@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFundingReport,
   emptyFundingReport,
+  readFundingBias,
   settlementsPerDay,
 } from "@/engines/fundingRates";
 import type { FundingPoint, PremiumIndexSnapshot } from "@/lib/binance";
@@ -173,5 +174,130 @@ describe("buildFundingReport", () => {
       expect(Number.isFinite(r.settlementsPerDay)).toBe(true);
       expect(r.settlementsPerDay).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * The positioning read.
+ *
+ * The bug this replaces: crowding was measured against zero, so any positive
+ * rate read as "the crowd is positioned long" — including a rate sitting
+ * exactly on the interest-rate anchor, where longs pay only because the
+ * formula has a floor. Almost every quiet market looked mildly long.
+ */
+describe("readFundingBias", () => {
+  const read = (over: Partial<Parameters<typeof readFundingBias>[0]> = {}) =>
+    readFundingBias({
+      currentRatePct: 0.01,
+      interestRatePct: 0.01,
+      basisPct: 0,
+      settlementsPerDay: 3,
+      consistency: 1,
+      samples: 21,
+      ...over,
+    });
+
+  it("calls a rate sitting on its anchor neutral, not long", () => {
+    // The exact case that was wrong: 0.0078% is POSITIVE, so longs do pay —
+    // but it is below the 0.01% anchor, which means the premium component is
+    // negative and nobody is crowded at all.
+    const r = read({ currentRatePct: 0.0078, interestRatePct: 0.01 });
+    expect(r.label).toBe("neutral");
+    expect(r.mode).toBe("none");
+    expect(r.onAnchor).toBe(true);
+    expect(r.excessAnnualisedPct!).toBeLessThan(0);
+    expect(r.detail).toMatch(/no positioning signal/i);
+  });
+
+  it("measures the excess against the anchor, not against zero", () => {
+    // 0.01% on a 0.01% anchor is zero excess, however positive the rate is.
+    expect(read({ currentRatePct: 0.01, interestRatePct: 0.01 }).excessAnnualisedPct).toBe(0);
+    // 0.03% is 0.02% of excess: 0.02 x 3 x 365 = 21.9% annualised.
+    expect(
+      read({ currentRatePct: 0.03, interestRatePct: 0.01 }).excessAnnualisedPct
+    ).toBeCloseTo(21.9, 1);
+  });
+
+  it("reads a moderate long cost as confirmatory bullish", () => {
+    const r = read({ currentRatePct: 0.03, interestRatePct: 0.01 });
+    expect(r.label).toBe("bullish");
+    expect(r.mode).toBe("confirmatory");
+    expect(r.detail).toMatch(/confirms the crowd/i);
+  });
+
+  it("reads a moderate short cost as confirmatory bearish", () => {
+    const r = read({ currentRatePct: -0.02, interestRatePct: 0.01 });
+    expect(r.label).toBe("bearish");
+    expect(r.mode).toBe("confirmatory");
+  });
+
+  it("flips to contrarian once the crowd is paying heavily", () => {
+    // Longs paying ~120% annualised over the anchor is not a bull confirmation,
+    // it is a squeeze waiting to happen. This inversion is the whole point.
+    const r = read({ currentRatePct: 0.12, interestRatePct: 0.01 });
+    expect(r.label).toBe("bearish");
+    expect(r.mode).toBe("contrarian");
+    expect(r.detail).toMatch(/their exit is the move/i);
+  });
+
+  it("flips the other way when shorts are the crowded side", () => {
+    const r = read({ currentRatePct: -0.09, interestRatePct: 0.01 });
+    expect(r.label).toBe("bullish");
+    expect(r.mode).toBe("contrarian");
+  });
+
+  it("downgrades strength when the series is a spike rather than a cost", () => {
+    const steady = read({ currentRatePct: 0.15, consistency: 1, samples: 21 });
+    const spiky = read({ currentRatePct: 0.15, consistency: 0.4, samples: 21 });
+    expect(steady.strength).toBe("strong");
+    expect(spiky.strength).not.toBe("strong");
+    expect(spiky.detail).toMatch(/spike/i);
+  });
+
+  it("flags a premium pointing the other way from the rate", () => {
+    // Positive funding with a negative mark-to-index is the formula's floor
+    // showing through, and it deserves to be said rather than buried.
+    const r = read({ currentRatePct: 0.0078, interestRatePct: 0.01, basisPct: -0.061 });
+    expect(r.premiumDisagrees).toBe(true);
+    expect(r.detail).toMatch(/floor showing through|points the other way/i);
+  });
+
+  it("ignores a premium too small to mean anything", () => {
+    expect(read({ currentRatePct: 0.03, basisPct: -0.001 }).premiumDisagrees).toBe(false);
+  });
+
+  it("assumes Binance's published anchor when the API omits it", () => {
+    const r = read({ currentRatePct: 0.01, interestRatePct: null });
+    expect(r.onAnchor).toBe(true);
+    expect(r.excessAnnualisedPct).toBe(0);
+  });
+
+  it("returns a neutral read rather than throwing on a missing rate", () => {
+    const r = read({ currentRatePct: null });
+    expect(r.label).toBe("neutral");
+    expect(r.excessAnnualisedPct).toBeNull();
+  });
+
+  it("never states the bias as a price prediction", () => {
+    for (const rate of [0.0078, 0.03, -0.02, 0.12, -0.09]) {
+      const r = read({ currentRatePct: rate });
+      const text = `${r.headline} ${r.detail}`.toLowerCase();
+      for (const banned of ["will rise", "will fall", "price will", "expect price", "guaranteed"]) {
+        expect(text).not.toContain(banned);
+      }
+    }
+    // And the contrarian read has to say it is about positioning, not timing.
+    expect(read({ currentRatePct: 0.12 }).detail).toMatch(/not when it lights|where the fuel is/i);
+  });
+
+  it("carries the bias through the full report", () => {
+    const r = buildFundingReport(
+      "T",
+      premium({ lastFundingRate: 0.000078, interestRate: 0.0001, basisPct: -0.061 }),
+      series(21, 0.000078)
+    );
+    expect(r.bias.label).toBe("neutral");
+    expect(r.bias.premiumDisagrees).toBe(true);
+    expect(r.excessAnnualisedPct).toBe(r.bias.excessAnnualisedPct);
   });
 });

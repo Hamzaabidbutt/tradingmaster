@@ -61,7 +61,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
         title:
           "Open-interest line. Delta says who was aggressive; this says whether that aggression opened positions or closed them.",
       },
-      { key: "orderFlowEvents", label: "ABS", title: "Absorption, exhaustion & trapped-trader markers" },
+      {
+        key: "orderFlowEvents",
+        label: "ABS",
+        title:
+          "Order-flow events named by side: SUPPLY ABSORBED (selling ate by resting bids, bullish) vs DEMAND ABSORBED (buying ate by resting offers, bearish); BUYERS / SELLERS EXHAUSTED; and trapped traders. Absorption also draws its price as a level.",
+      },
       { key: "bigTrades", label: "BIG", title: "Large-order bubbles" },
       { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
     ],
