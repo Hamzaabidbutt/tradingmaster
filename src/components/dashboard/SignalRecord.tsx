@@ -56,6 +56,9 @@ interface RecordReport {
 }
 
 const BUCKET_STYLE: Record<OutcomeBucket, string> = {
+  // Neither of these is a result, so neither gets a result colour.
+  pending: "bg-white/5 text-slate-500",
+  unfilled: "bg-white/5 text-slate-500",
   active: "bg-white/5 text-slate-400",
   successful: "bg-bull/15 text-bull",
   breakeven: "bg-neon-amber/15 text-neon-amber",
@@ -63,6 +66,8 @@ const BUCKET_STYLE: Record<OutcomeBucket, string> = {
 };
 
 const BUCKET_LABEL: Record<OutcomeBucket, string> = {
+  pending: "Waiting to fill",
+  unfilled: "Never filled",
   active: "Running",
   successful: "Successful",
   breakeven: "Break-even",

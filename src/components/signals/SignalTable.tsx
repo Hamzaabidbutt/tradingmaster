@@ -34,7 +34,7 @@ import {
  * hide that.
  */
 
-type Bucket = "active" | "successful" | "breakeven" | "failed" | "expired";
+type Bucket = "pending" | "unfilled" | "active" | "successful" | "breakeven" | "failed" | "expired";
 
 function bucketOf(s: SignalRow): Bucket {
   const bucket = classifyBucket({
@@ -50,6 +50,9 @@ function bucketOf(s: SignalRow): Bucket {
 }
 
 const BUCKET_STYLE: Record<Bucket, string> = {
+  // Muted on purpose: a signal that has not filled has no result to colour.
+  pending: "border-white/10 bg-white/5 text-slate-400",
+  unfilled: "border-white/10 bg-white/5 text-slate-500",
   active: "border-neon-cyan/30 bg-neon-cyan/10 text-neon-cyan",
   successful: "border-bull/35 bg-bull/10 text-bull",
   breakeven: "border-amber-400/35 bg-amber-400/10 text-amber-300",
@@ -64,6 +67,8 @@ const RESULT_LABEL: Record<string, string> = {
   TP3_HIT: "Full target",
   STOPPED: "Stopped out",
   EXPIRED: "Expired",
+  PENDING: "Waiting at the entry",
+  UNFILLED: "Price never came",
 };
 
 /**
