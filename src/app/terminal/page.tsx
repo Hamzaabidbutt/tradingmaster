@@ -10,6 +10,7 @@ import { useFunding } from "@/hooks/useFunding";
 import RatesPanel from "@/components/panels/RatesPanel";
 import PositioningPanel from "@/components/panels/PositioningPanel";
 import ConflictPanel from "@/components/panels/ConflictPanel";
+import StateCard from "@/components/panels/StateCard";
 import { useSeasonality } from "@/hooks/useSeasonality";
 import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
@@ -216,6 +217,23 @@ function Terminal() {
         right edge. Their own `overflow-x-auto` does not help, because the
         blow-out happens on the track, not inside them.
       */}
+      {/* The state card leads the page. It is the only box that answers the
+          question the rest of them are evidence for — which state this is,
+          both ways out, and the price that would make the read wrong. Above
+          the chart because a read formed after scrolling past seventeen panels
+          is a read assembled from whichever ones were remembered. */}
+      <div className="p-3 pb-0">
+        <div className="h-[420px]">
+          <StateCard
+            analysis={analysis}
+            candles={candles}
+            openInterest={openInterest}
+            funding={funding}
+            pricePrecision={pricePrecision}
+          />
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         {/* Chart cell */}
         <div className="glass flex h-[620px] min-w-0 flex-col p-3 xl:h-auto">
