@@ -256,42 +256,55 @@ function Terminal() {
           </div>
         </div>
 
-        {/* Right rail: the analyst feed, and the cost of carry beneath it.
-            Funding belongs next to the feed rather than down in the deep-dive
-            rows because it is context for everything above it — the same
-            footprint means something different when the crowd is paying to
-            hold the other side of it. The rail sets the row height on desktop
-            and the chart cell stretches to match, which is why that cell drops
-            its fixed height at xl. */}
+        {/* Right rail: the analyst feed alone.
+            The rail sets the row height on desktop and the chart cell
+            stretches to match — which is why that cell drops its fixed height
+            at xl, and why anything stacked here makes the chart taller. The
+            funding box used to sit beneath the feed and was pushing the chart
+            to nearly a thousand pixels; it now leads the conclusion row
+            instead, where it reads as context for the pulse rather than as
+            extra rail. */}
         <div className="flex min-w-0 flex-col gap-3">
           <div className="h-[620px]">
             <AIInsightPanel analysis={analysis} />
           </div>
-          <div className="h-[360px]">
-            <RatesPanel report={funding} symbol={symbol} />
-          </div>
         </div>
 
-        {/* Footprint sits directly under the AI feed on mobile, where the two
-            are read together. On xl the right rail is only one column wide, so
-            the ladder lives in the deep-dive row instead — hence one instance
-            per breakpoint rather than a reordered shared node. */}
-        <div className="h-[600px] xl:hidden">
-          <FootprintPanel analysis={analysis} />
-        </div>
         <div className="h-[620px] xl:hidden">
           <PressureMapPanel analysis={analysis} pricePrecision={pricePrecision} />
         </div>
       </div>
 
-      {/* Conclusion row: recent-window pulse + multi-window read, side by side.
+      {/* Conclusion row: recent-window pulse + the cost of carry beside it.
           The pulse window itself is user-selectable (1h by default) — see
-          MarketPulse. Fixed heights keep every panel's own body scrollable
-          rather than letting content overflow and get clipped. */}
+          MarketPulse. Funding sits here because it prices the conclusion: the
+          same pulse means something different when the crowd is paying to hold
+          the side it favours. Fixed heights keep every panel's own body
+          scrollable rather than letting content overflow and get clipped. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="h-[640px]">
           <SignalPanel analysis={analysis} pricePrecision={pricePrecision} />
         </div>
+        <div className="h-[640px]">
+          <RatesPanel report={funding} symbol={symbol} />
+        </div>
+      </div>
+
+      {/* Evidence for the pulse above it: the ladder, and the read taken off
+          the ladder. One instance at every breakpoint now — this row is full
+          width, so the old arrangement of a mobile copy under the AI feed plus
+          a desktop copy down in the deep-dive row has nothing left to solve. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 xl:grid-cols-2">
+        <div className="h-[560px]">
+          <FootprintPanel analysis={analysis} />
+        </div>
+        <div className="h-[560px]">
+          <OrderFlowPanel analysis={analysis} />
+        </div>
+      </div>
+
+      {/* The multi-window read, below the single-window one it generalises. */}
+      <div className="p-3 pt-0">
         <div className="h-[640px]">
           <MultiWindowPanel analysis={analysis} pricePrecision={pricePrecision} />
         </div>
@@ -316,19 +329,15 @@ function Terminal() {
         <div className="h-[560px]"><WhaleOrdersPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
       </div>
 
-      {/* Order-flow deep dive: footprint, volume profile, absorption/exhaustion */}
-      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 lg:grid-cols-3">
-        <div className="hidden h-[600px] xl:block"><FootprintPanel analysis={analysis} /></div>
+      {/* Order-flow deep dive: volume profile and absorption/exhaustion. The
+          footprint and the order-flow read moved up under the pulse, so what
+          is left here is the pair that stands on its own. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 lg:grid-cols-2">
         <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
         <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>
       </div>
 
-      {/* Order flow, directly beneath the footprint it is derived from. */}
-      <div className="p-3 pt-0">
-        <div className="h-[560px]"><OrderFlowPanel analysis={analysis} /></div>
-      </div>
-
-      {/* Forced-flow map — sits directly below the footprint row on desktop. */}
+      {/* Forced-flow map. */}
       <div className="hidden p-3 pt-0 xl:block">
         <div className="h-[620px]">
           <PressureMapPanel analysis={analysis} pricePrecision={pricePrecision} />
