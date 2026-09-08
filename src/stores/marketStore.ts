@@ -83,6 +83,16 @@ interface MarketState {
   /** null until the user drags the inspector; then remembered across sessions */
   inspectorPos: InspectorPosition | null;
   /**
+   * Panels the user has folded away, by id.
+   *
+   * Persisted because it is a standing preference about screen real estate
+   * rather than a per-visit choice — a page of seventeen panels is only
+   * navigable if the ones you never read stay shut. Stored as an explicit map
+   * rather than a list of open panels so a newly added panel defaults to
+   * visible: a user who has never seen a box cannot have decided to hide it.
+   */
+  collapsedPanels: Record<string, boolean>;
+  /**
    * Collapsed to a one-line strip. Persisted because it is a standing
    * preference about screen real estate, not a per-visit choice — a user who
    * minimised it once wants it minimised tomorrow.
@@ -103,6 +113,7 @@ interface MarketState {
   toggleSidebar: () => void;
   setPulseWindow: (m: PulseWindow) => void;
   setInspectorPos: (p: InspectorPosition | null) => void;
+  togglePanel: (id: string) => void;
   toggleInspectorMinimized: () => void;
 }
 
@@ -165,6 +176,7 @@ export const useMarketStore = create<MarketState>()(
       pulseWindowMinutes: 60,
       inspectorPos: null,
       inspectorMinimized: false,
+      collapsedPanels: {},
       setSymbol: (symbol) => set({ symbol }),
       setTimeframe: (timeframe) => set({ timeframe }),
       toggleOverlay: (key) =>
@@ -173,6 +185,8 @@ export const useMarketStore = create<MarketState>()(
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setPulseWindow: (pulseWindowMinutes) => set({ pulseWindowMinutes }),
       setInspectorPos: (inspectorPos) => set({ inspectorPos }),
+      togglePanel: (id) =>
+        set((s) => ({ collapsedPanels: { ...s.collapsedPanels, [id]: !s.collapsedPanels[id] } })),
       toggleInspectorMinimized: () =>
         set((st) => ({ inspectorMinimized: !st.inspectorMinimized })),
     }),
