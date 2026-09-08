@@ -8,6 +8,9 @@ import { useOpenInterest } from "@/hooks/useOpenInterest";
 import { useInstitutional } from "@/hooks/useInstitutional";
 import { useFunding } from "@/hooks/useFunding";
 import RatesPanel from "@/components/panels/RatesPanel";
+import PositioningPanel from "@/components/panels/PositioningPanel";
+import ConflictPanel from "@/components/panels/ConflictPanel";
+import StateCard from "@/components/panels/StateCard";
 import { useSeasonality } from "@/hooks/useSeasonality";
 import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
@@ -102,8 +105,13 @@ function Terminal() {
   const pricePrecision = precisionFor(symbol);
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
-  // The book is only polled while at least one wall overlay is on.
-  const { openInterest } = useOpenInterest(symbol, timeframe, overlays.openInterest);
+  /* Open interest is now polled unconditionally rather than only while its
+     overlay is on. It stopped being an overlay input the moment the
+     positioning panel started reading it: that box is always on screen, and
+     the same reasoning applies as for funding below — there is nothing to gate
+     it on. One request a minute per symbol, served from the same cache the
+     overlay uses. The overlay itself is unchanged and still opt-in. */
+  const { openInterest } = useOpenInterest(symbol, timeframe, true);
   // Same gating: the footprint costs a full engine pass and three Binance
   // calls, so it runs only while the overlay that draws it is switched on.
   const { setup: institutional, loading: institutionalLoading } = useInstitutional(
@@ -209,6 +217,23 @@ function Terminal() {
         right edge. Their own `overflow-x-auto` does not help, because the
         blow-out happens on the track, not inside them.
       */}
+      {/* The state card leads the page. It is the only box that answers the
+          question the rest of them are evidence for — which state this is,
+          both ways out, and the price that would make the read wrong. Above
+          the chart because a read formed after scrolling past seventeen panels
+          is a read assembled from whichever ones were remembered. */}
+      <div className="p-3 pb-0">
+        <div className="h-[420px]">
+          <StateCard
+            analysis={analysis}
+            candles={candles}
+            openInterest={openInterest}
+            funding={funding}
+            pricePrecision={pricePrecision}
+          />
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         {/* Chart cell */}
         <div className="glass flex h-[620px] min-w-0 flex-col p-3 xl:h-auto">
@@ -287,6 +312,25 @@ function Terminal() {
         </div>
         <div className="h-[640px]">
           <RatesPanel report={funding} symbol={symbol} />
+        </div>
+      </div>
+
+      {/* Positioning and conflicts, beneath the conclusion they qualify.
+          Funding says what the crowded side is paying; positioning says
+          whether the last few bars were that crowd arriving or leaving; and
+          conflicts says which parts of all of it disagree — the part the
+          composite score averages away. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 xl:grid-cols-2">
+        <div className="h-[560px]">
+          <PositioningPanel candles={candles} openInterest={openInterest} timeframe={timeframe} />
+        </div>
+        <div className="h-[560px]">
+          <ConflictPanel
+            analysis={analysis}
+            candles={candles}
+            openInterest={openInterest}
+            funding={funding}
+          />
         </div>
       </div>
 
