@@ -23,6 +23,7 @@ import type { OpenInterestPoint } from "@/lib/binance";
 import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleStats";
 import { buildCandleStory } from "@/engines/candleStory";
 import { findStrongCandles } from "@/engines/strongCandles";
+import { findAggressiveCandles, strongestPerRun } from "@/engines/aggressiveCandles";
 import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
@@ -727,9 +728,38 @@ export default function TradingChart({
     }
   }, [ready, analysis, overlays.liquidationCumulative]);
 
+  /** Bars one side forced. Derived from the candles, not the analysis poll. */
+  const aggressive = useMemo(
+    () => (overlays.aggressiveCandles ? findAggressiveCandles(candles) : []),
+    [overlays.aggressiveCandles, candles]
+  );
+
   // --- Markers: structure, sweeps, patterns, order-flow events ---
   const markers = useMemo<SeriesMarker<Time>[]>(() => {
     const out: SeriesMarker<Time>[] = [];
+
+    /* Aggressive bars, named by who crossed the spread. Deliberately not
+       coloured by the candle's own direction: a red bar with 80% taker buying
+       is buyers paying up into supply, and colouring that red would hide the
+       only interesting thing about it.
+
+       Collapsed to one mark per push. Five adjacent bars of one-sided selling
+       is one event, and labelling each of them stacked the text into an
+       unreadable smear on any zoomed-out chart. The run length is printed
+       instead, which is the part the extra bars were carrying. */
+    for (const a of strongestPerRun(aggressive).slice(-8)) {
+      out.push({
+        time: a.time as UTCTimestamp,
+        position: a.side === "buy" ? "belowBar" : "aboveBar",
+        color: a.side === "buy" ? "#00e5a0" : "#ff4d6d",
+        shape: a.side === "buy" ? "arrowUp" : "arrowDown",
+        text:
+          `AGGR ${a.side === "buy" ? "BUY" : "SELL"} ${(a.share * 100).toFixed(0)}%` +
+          (a.runLength > 1 ? ` ×${a.runLength}` : "") +
+          (a.extreme ? " !" : ""),
+        size: a.extreme ? 2 : 1,
+      });
+    }
 
     /* The buying checklist, bar by bar.
        Placed before the `analysis` guard on purpose: the footprint arrives on
@@ -839,7 +869,7 @@ export default function TradingChart({
       }
     }
     return out.sort((a, b) => Number(a.time) - Number(b.time));
-  }, [analysis, overlays, institutional]);
+  }, [analysis, overlays, institutional, aggressive]);
 
   useEffect(() => {
     if (!ready || disposedRef.current || !candleSeriesRef.current) return;
@@ -921,8 +951,22 @@ export default function TradingChart({
       add(analysis.volumeProfile.poc, "#facc15", "POC", LineStyle.Solid, 2);
       add(analysis.volumeProfile.vah, "rgba(250,204,21,0.45)", "VAH", LineStyle.Dashed);
       add(analysis.volumeProfile.val, "rgba(250,204,21,0.45)", "VAL", LineStyle.Dashed);
+      /* Both node types, because they are opposite facts and only one was
+         being drawn. An LVN is price the market rejected and tends to travel
+         through quickly; an HVN is price it accepted and keeps coming back
+         to. Trading toward an LVN and trading toward an HVN are different
+         expectations, and the chart was only showing one of them. */
       for (const lvn of analysis.volumeProfile.lvns.slice(0, 3)) {
         add(lvn.price, "rgba(167,139,250,0.5)", "LVN", LineStyle.Dotted);
+      }
+      /* Skipping the HVN that *is* the POC. The point of maximum volume is
+         the highest-volume node by definition, so the top HVN normally lands
+         on the POC and drew a second line with a duplicate label at the same
+         price — noise, not a second level. */
+      const pocRow = analysis.volumeProfile.poc;
+      for (const hvn of analysis.volumeProfile.hvns.slice(0, 3)) {
+        if (pocRow > 0 && Math.abs(hvn.price - pocRow) / pocRow < 0.0015) continue;
+        add(hvn.price, "rgba(250,204,21,0.55)", "HVN", LineStyle.Solid);
       }
     }
     if (overlays.orderFlowEvents) {
@@ -1412,6 +1456,53 @@ export default function TradingChart({
         }
       }
 
+      /* ---------------- Delta volume profile ----------------
+         The same price bins as the volume profile, but showing NET taker
+         delta rather than total volume. They answer different questions and
+         routinely disagree: volume says where trading happened, delta says
+         who won there. A price with enormous volume and delta near zero was
+         a fight; the same volume with one-sided delta was a rout.
+
+         Diverging from a zero axis rather than growing from an edge, because
+         the sign is the whole point and a one-sided bar chart would hide it. */
+      if (overlays.deltaProfile) {
+        const vp = analysis.volumeProfile;
+        const maxAbs = Math.max(...vp.rows.map((r) => Math.abs(r.delta)), 1e-9);
+        const half = Math.min(70, w * 0.09);
+        // Offset inward when the volume profile is also on, so the two do not
+        // draw on top of each other.
+        const axis = rightEdge - (overlays.volumeProfile ? Math.min(150, w * 0.18) + 14 : 0) - half;
+        const rowH = Math.max(
+          1.5,
+          Math.abs(
+            (yOf(vp.rows[1]?.price ?? vp.rows[0]?.price ?? 0) ?? 0) -
+              (yOf(vp.rows[0]?.price ?? 0) ?? 0)
+          ) - 0.5
+        );
+
+        ctx.strokeStyle = "rgba(139,147,167,0.35)";
+        ctx.beginPath();
+        ctx.moveTo(axis, 0);
+        ctx.lineTo(axis, h);
+        ctx.stroke();
+
+        for (const row of vp.rows) {
+          const y = yOf(row.price);
+          if (y == null || row.delta === 0) continue;
+          const len = (Math.abs(row.delta) / maxAbs) * half;
+          if (len < 0.5) continue;
+          const positive = row.delta > 0;
+          ctx.fillStyle = positive ? "rgba(0,229,160,0.55)" : "rgba(255,77,109,0.55)";
+          ctx.fillRect(positive ? axis : axis - len, y - rowH / 2, len, rowH);
+        }
+
+        ctx.fillStyle = "rgba(139,147,167,0.7)";
+        ctx.font = "8px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("Δ PROFILE", axis, 9);
+        ctx.textAlign = "left";
+      }
+
       /* ---------------- Fibonacci ---------------- */
       if (overlays.fibonacci) {
         const fib = analysis.fibonacci;
@@ -1484,6 +1575,170 @@ export default function TradingChart({
           ctx.strokeStyle = bt.side === "buy" ? "rgba(0,229,160,0.7)" : "rgba(255,77,109,0.7)";
           ctx.lineWidth = 1;
           ctx.stroke();
+        }
+      }
+
+      /* ---------------- Contract bubbles ----------------
+         One bubble per candle, sized by contracts traded and coloured by net
+         taker delta. Colour follows delta rather than the candle's direction
+         on purpose: a green candle built on net selling is the interesting
+         case, and colouring by direction would erase it.
+
+         The split is drawn as a filled arc — the buy share of the circle —
+         so the ratio is readable at a glance without printing anything, and
+         the counts are printed only when the bars are wide enough to hold
+         them.
+
+         Two things this drawing has to survive, both found on a real chart:
+
+         1. The bubble lands on the candle body, and a body is solid. A faint
+            wash over solid colour is invisible, so the disc gets a dark
+            backing first and the ring is drawn heavy enough to read against
+            a filled candle.
+         2. Zoomed out, 140 circles at two pixels of spacing is a smear, not
+            information. Below a usable bar width the overlay draws nothing
+            and says so, rather than pretending the fog is a signal. */
+      if (overlays.contractBubbles && candles.length > 5) {
+        const MIN_BAR_W = 5;
+        if (barWidth < MIN_BAR_W) {
+          ctx.fillStyle = "rgba(139,147,167,0.8)";
+          ctx.font = "9px ui-monospace, monospace";
+          ctx.textAlign = "left";
+          ctx.fillText("CONTRACTS — zoom in to read the per-candle split", 10, 14);
+        } else {
+          const recent = candles.slice(-140);
+          const meanVol =
+            recent.reduce((sum, c) => sum + c.volume, 0) / Math.max(1, recent.length);
+          const printNumbers = barWidth >= 34;
+          // Cap on bar width as well as on volume, so the bubbles grow into
+          // the space the bars give them instead of staying lost inside a
+          // wide body.
+          const rCap = Math.max(6, Math.min(26, barWidth * 0.45));
+          ctx.font = "8px ui-monospace, monospace";
+          ctx.textAlign = "center";
+
+          for (const c of recent) {
+            if (c.volume <= 0 || meanVol <= 0) continue;
+            const x = xOf(c.time);
+            const y = yOf((c.high + c.low) / 2);
+            if (x == null || y == null) continue;
+            const xn = Number(x);
+            const yn = Number(y);
+            if (xn < 14 || xn > rightEdge - 14) continue;
+
+            const buy = c.takerBuyVolume ?? c.volume / 2;
+            const sell = c.volume - buy;
+            const buyShare = c.volume > 0 ? buy / c.volume : 0.5;
+            // Square-root scaling: area, not radius, should track volume, or
+            // a 10x bar renders ten times as wide and swamps the chart.
+            const r = Math.max(3, Math.min(rCap, Math.sqrt(c.volume / meanVol) * rCap * 0.62));
+            const netBuy = buy >= sell;
+
+            // Backing disc: without it the bubble vanishes into the candle.
+            ctx.beginPath();
+            ctx.arc(xn, yn, r, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(9,12,20,0.78)";
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(xn, yn, r, 0, Math.PI * 2);
+            ctx.fillStyle = netBuy ? "rgba(0,229,160,0.2)" : "rgba(255,77,109,0.2)";
+            ctx.fill();
+
+            // The buy share as a filled wedge from the top, clockwise.
+            if (buyShare > 0.02) {
+              ctx.beginPath();
+              ctx.moveTo(xn, yn);
+              ctx.arc(xn, yn, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * buyShare);
+              ctx.closePath();
+              ctx.fillStyle = "rgba(0,229,160,0.45)";
+              ctx.fill();
+            }
+
+            /* Dark halo under the coloured ring. A red ring lands on red
+               candle bodies and a green one on green — same colour, so the
+               ring disappeared exactly on the bars it was annotating. The
+               halo gives it an edge to read against on any background. */
+            ctx.beginPath();
+            ctx.arc(xn, yn, r, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(6,8,14,0.85)";
+            ctx.lineWidth = 3.5;
+            ctx.stroke();
+
+            ctx.strokeStyle = netBuy ? "rgba(0,229,160,0.95)" : "rgba(255,77,109,0.95)";
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(xn, yn, r, 0, Math.PI * 2);
+            ctx.stroke();
+
+            if (printNumbers) {
+              // Same contrast problem as the ring: on a tall body the counts
+              // land on solid colour, so they get the halo too.
+              ctx.lineWidth = 3;
+              ctx.strokeStyle = "rgba(6,8,14,0.85)";
+              for (const [text, dy, fill] of [
+                [compact(buy), -r - 7, "rgba(0,229,160,0.95)"],
+                [compact(sell), r + 15, "rgba(255,77,109,0.95)"],
+              ] as const) {
+                ctx.strokeText(text, xn, yn + dy);
+                ctx.fillStyle = fill;
+                ctx.fillText(text, xn, yn + dy);
+              }
+            }
+          }
+          ctx.textAlign = "left";
+        }
+      }
+
+      /* ---------------- Stacked footprint imbalances ----------------
+         Three or more consecutive imbalances on the same side, bracketed over
+         the price range they actually span. The range is the point: a stack
+         is a claim about *where* one side kept getting filled at the other's
+         price, and a marker under the bar would throw that away. */
+      if (overlays.stackedImbalance && analysis.footprint.candles.length > 0) {
+        ctx.font = "8px ui-monospace, monospace";
+        for (const fc of analysis.footprint.candles.slice(-40)) {
+          for (const stack of fc.stackedImbalances) {
+            const x = xOf(fc.time);
+            const yTop = yOf(Math.max(stack.fromPrice, stack.toPrice));
+            const yBot = yOf(Math.min(stack.fromPrice, stack.toPrice));
+            if (x == null || yTop == null || yBot == null) continue;
+            const xn = Number(x);
+            if (xn < 4 || xn > rightEdge - 4) continue;
+            const buy = stack.direction === "buy";
+            const wid = Math.max(4, barWidth * 0.9);
+            const colour = buy ? "rgba(0,229,160,0.85)" : "rgba(255,77,109,0.85)";
+
+            ctx.strokeStyle = colour;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            // A bracket rather than a box: it marks the span without hiding
+            // the candle inside it.
+            ctx.moveTo(xn - wid / 2, Number(yTop));
+            ctx.lineTo(xn + wid / 2, Number(yTop));
+            ctx.moveTo(xn + wid / 2, Number(yTop));
+            ctx.lineTo(xn + wid / 2, Number(yBot));
+            ctx.moveTo(xn - wid / 2, Number(yBot));
+            ctx.lineTo(xn + wid / 2, Number(yBot));
+            ctx.stroke();
+
+            if (barWidth >= 10) {
+              const label = `${buy ? "BUY" : "SELL"} STACK ×${stack.count}`;
+              const wLabel = ctx.measureText(label).width;
+              // Flip to the left of the bracket when the label would run off
+              // the price scale — it was being clipped mid-word there.
+              const right = xn + wid / 2 + 3;
+              const flip = right + wLabel > rightEdge - 4;
+              ctx.fillStyle = colour;
+              ctx.textAlign = flip ? "right" : "left";
+              ctx.fillText(
+                label,
+                flip ? xn - wid / 2 - 3 : right,
+                Number(buy ? yBot : yTop) + (buy ? 8 : -3)
+              );
+              ctx.textAlign = "left";
+            }
+          }
         }
       }
 
@@ -1629,7 +1884,16 @@ export default function TradingChart({
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
-      <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
+      {/* z-[3] is load-bearing. lightweight-charts sets an explicit z-index of
+          1 and 2 on its own pane canvases, and a positioned element with
+          `z-index: auto` paints *below* a positioned sibling with a positive
+          one no matter where it sits in the DOM. Without this the overlay was
+          drawing underneath the candle bodies: anything that landed on a solid
+          body — bubbles, brackets, session shading, trendlines — was simply
+          invisible, while the same drawing over a wick or empty space showed
+          fine. It looked like the overlays were only half working. It stays
+          below the price badge at z-10. */}
+      <canvas ref={overlayRef} className="pointer-events-none absolute inset-0 z-[3]" />
 
       {overlays.buyingChecklist && (
         <BuyingChecklistCard

@@ -54,6 +54,14 @@ export interface OverlayToggles {
   swingLabels: boolean;
   /** auto trendlines through swing points price has actually respected */
   trendlines: boolean;
+  /** per-candle bubbles sized by contracts traded, split buy against sell */
+  contractBubbles: boolean;
+  /** candles carrying 3+ consecutive footprint imbalances on one side */
+  stackedImbalance: boolean;
+  /** candles where one side crossed the spread on real volume */
+  aggressiveCandles: boolean;
+  /** volume profile of net delta rather than of total volume */
+  deltaProfile: boolean;
 }
 
 /** Where the candle inspector has been dragged to, in px from the chart's top-left. */
@@ -131,6 +139,12 @@ export const useMarketStore = create<MarketState>()(
         buyingChecklist: false,
         // Session shading is heavy ink behind every candle, so it is opt-in.
         sessions: false,
+        // All four print per-candle ink, so each is opt-in: switching them on
+        // together would bury the candles they annotate.
+        contractBubbles: false,
+        stackedImbalance: false,
+        aggressiveCandles: false,
+        deltaProfile: false,
         // On by default: these are the labels the structure panel is already
         // talking about, and reading them off the chart is the point.
         swingLabels: true,
