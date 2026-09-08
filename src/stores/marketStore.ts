@@ -91,6 +91,15 @@ interface MarketState {
   setSymbol: (s: string) => void;
   setTimeframe: (tf: Timeframe) => void;
   toggleOverlay: (key: keyof OverlayToggles) => void;
+  /**
+   * Apply several overlays at once.
+   *
+   * Merged over the current state rather than replacing it, so a caller only
+   * states the keys it means and every overlay it does not name keeps whatever
+   * the user had set. That is what lets the reading-layer presets switch their
+   * own group without disturbing preferences outside it.
+   */
+  setOverlays: (patch: Partial<OverlayToggles>) => void;
   toggleSidebar: () => void;
   setPulseWindow: (m: PulseWindow) => void;
   setInspectorPos: (p: InspectorPosition | null) => void;
@@ -160,6 +169,7 @@ export const useMarketStore = create<MarketState>()(
       setTimeframe: (timeframe) => set({ timeframe }),
       toggleOverlay: (key) =>
         set((s) => ({ overlays: { ...s.overlays, [key]: !s.overlays[key] } })),
+      setOverlays: (patch) => set((s) => ({ overlays: { ...s.overlays, ...patch } })),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setPulseWindow: (pulseWindowMinutes) => set({ pulseWindowMinutes }),
       setInspectorPos: (inspectorPos) => set({ inspectorPos }),

@@ -8,6 +8,7 @@ import { useOpenInterest } from "@/hooks/useOpenInterest";
 import { useInstitutional } from "@/hooks/useInstitutional";
 import { useFunding } from "@/hooks/useFunding";
 import RatesPanel from "@/components/panels/RatesPanel";
+import PositioningPanel from "@/components/panels/PositioningPanel";
 import { useSeasonality } from "@/hooks/useSeasonality";
 import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
@@ -102,8 +103,13 @@ function Terminal() {
   const pricePrecision = precisionFor(symbol);
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);
   const { kline, price, liquidations, connected } = useLiveMarket(symbol, timeframe);
-  // The book is only polled while at least one wall overlay is on.
-  const { openInterest } = useOpenInterest(symbol, timeframe, overlays.openInterest);
+  /* Open interest is now polled unconditionally rather than only while its
+     overlay is on. It stopped being an overlay input the moment the
+     positioning panel started reading it: that box is always on screen, and
+     the same reasoning applies as for funding below — there is nothing to gate
+     it on. One request a minute per symbol, served from the same cache the
+     overlay uses. The overlay itself is unchanged and still opt-in. */
+  const { openInterest } = useOpenInterest(symbol, timeframe, true);
   // Same gating: the footprint costs a full engine pass and three Binance
   // calls, so it runs only while the overlay that draws it is switched on.
   const { setup: institutional, loading: institutionalLoading } = useInstitutional(
@@ -287,6 +293,16 @@ function Terminal() {
         </div>
         <div className="h-[640px]">
           <RatesPanel report={funding} symbol={symbol} />
+        </div>
+      </div>
+
+      {/* Positioning, beneath the conclusion it qualifies. Funding says what
+          the crowded side is paying; this says whether the last few bars were
+          that crowd arriving or leaving — which is the difference between a
+          move with fuel behind it and one spending the last of it. */}
+      <div className="p-3 pt-0">
+        <div className="h-[560px]">
+          <PositioningPanel candles={candles} openInterest={openInterest} timeframe={timeframe} />
         </div>
       </div>
 

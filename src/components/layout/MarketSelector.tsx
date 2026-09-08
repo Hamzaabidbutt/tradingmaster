@@ -125,6 +125,87 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
   },
 ];
 
+/**
+ * Reading layers — one click per stage of a chart read.
+ *
+ * The toggle list below is the full instrument panel and stays exactly as it
+ * is; this sits on top of it. Thirty-odd independent switches describe what
+ * *can* be drawn but say nothing about the order to look in, and a market read
+ * is not a set of facts gathered in parallel — it is a sequence of conditional
+ * questions, each of which decides what the next one is even allowed to mean:
+ *
+ *  1. REGIME     which playbook applies at all
+ *  2. LOCATION   is this a price worth acting from
+ *  3. STRUCTURE  which side carries the burden of proof
+ *  4. FLOW       who is actually acting, right now
+ *  5. POSITION   who is already committed, and what it costs them
+ *
+ * The rule the sequence exists to enforce: flow without location is noise, and
+ * location without flow is a hope. Only the conjunction is worth anything, and
+ * you cannot see a conjunction while looking at everything at once.
+ *
+ * Applying a layer switches its own overlays on and the other layers' off, so
+ * each click is a clean pass rather than an accumulation. Overlays belonging to
+ * no layer (the inspector, the trade levels) are left exactly as the user set
+ * them — a preset is a lens on the chart, not a reset of their preferences.
+ */
+const LAYER_PRESETS: { id: string; label: string; title: string; keys: (keyof OverlayToggles)[] }[] = [
+  {
+    id: "regime",
+    label: "1 · REGIME",
+    title:
+      "Which playbook applies. Trend or range, and the clock it is running on — before any signal means anything. A mean-reversion setup inside a strong trend and a breakout inside a range are the same evidence read the wrong way round.",
+    keys: ["movingAverages", "trendlines", "sessions", "vwap", "volume"],
+  },
+  {
+    id: "location",
+    label: "2 · LOCATION",
+    title:
+      "Is this a price worth acting from? Value, the nodes either side of it, and the levels price has already respected. Location is what decides the risk-to-reward of everything that follows — mid-range, nothing is worth taking however good the flow looks.",
+    keys: [
+      "volumeProfile",
+      "supportResistance",
+      "orderBlocks",
+      "fvg",
+      "premiumDiscount",
+      "supplyDemand",
+      "equalLevels",
+    ],
+  },
+  {
+    id: "structure",
+    label: "3 · STRUCTURE",
+    title:
+      "Which side carries the burden of proof. The swing sequence, the breaks in it, and the liquidity those breaks ran into.",
+    keys: ["structure", "swingLabels", "trendlines", "liquidity", "equalLevels"],
+  },
+  {
+    id: "flow",
+    label: "4 · FLOW",
+    title:
+      "Who is acting right now. Delta, the footprint reads, aggression and absorption — the only layer that answers whether anybody is actually behind the level, and the trigger for everything the first three layers set up.",
+    keys: [
+      "volume",
+      "deltaNumbers",
+      "orderFlowEvents",
+      "aggressiveCandles",
+      "stackedImbalance",
+      "cvd",
+      "bigTrades",
+    ],
+  },
+  {
+    id: "position",
+    label: "5 · POSITION",
+    title:
+      "Who is already committed and what it costs them. Open interest, forced flow and the resting size — this is where the fuel for the next move is, and who supplies it.",
+    keys: ["openInterest", "liquidationDelta", "liquidationCumulative", "buyWalls", "sellWalls"],
+  },
+];
+
+/** Every key any layer touches — the set a preset is allowed to turn off. */
+const LAYER_KEYS = Array.from(new Set(LAYER_PRESETS.flatMap((l) => l.keys)));
+
 /** Symbol + timeframe + overlay controls for the chart header. */
 export default function MarketSelector({
   connected,
@@ -135,10 +216,27 @@ export default function MarketSelector({
   price: number | null;
   countdown?: string;
 }) {
-  const { symbol, timeframe, setSymbol, setTimeframe, overlays, toggleOverlay } = useMarketStore();
+  const { symbol, timeframe, setSymbol, setTimeframe, overlays, toggleOverlay, setOverlays } =
+    useMarketStore();
   const { precisionFor } = useSymbols();
   const [overlaysOpen, setOverlaysOpen] = useState(false);
   const activeCount = Object.values(overlays).filter(Boolean).length;
+
+  /** Switch one layer's overlays on and the other layers' off. */
+  const applyLayer = (keys: (keyof OverlayToggles)[]) => {
+    const wanted = new Set(keys);
+    const patch: Partial<OverlayToggles> = {};
+    for (const k of LAYER_KEYS) patch[k] = wanted.has(k);
+    setOverlays(patch);
+  };
+
+  /**
+   * A layer reads as active when everything it asks for is on. Deliberately
+   * not "no other layer's keys are on" — layers share overlays (trendlines
+   * belong to both regime and structure), so exclusivity would mean no layer
+   * ever lit up.
+   */
+  const layerActive = (keys: (keyof OverlayToggles)[]) => keys.every((k) => overlays[k]);
 
   return (
     <div className="space-y-2 px-1 pb-2">
@@ -190,6 +288,50 @@ export default function MarketSelector({
             {activeCount}
           </span>
           <span className="ml-1.5 text-slate-500">{overlaysOpen ? "▲" : "▼"}</span>
+        </button>
+      </div>
+
+      {/* Reading layers. Above the toggle list because it is the coarser
+          control: pick the pass you are on, then reach for individual
+          switches only if that pass needs adjusting. */}
+      <div className="flex flex-wrap items-center gap-1">
+        <span
+          className="mr-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500"
+          title="One click per stage of a chart read. Work through them in order: regime decides which playbook applies, location decides whether the price is worth acting from, structure says who has the burden of proof, flow says who is acting now, position says who is already committed. Flow without location is noise; location without flow is a hope."
+        >
+          Layers
+        </span>
+        {LAYER_PRESETS.map((layer) => {
+          const on = layerActive(layer.keys);
+          return (
+            <button
+              key={layer.id}
+              onClick={() => applyLayer(layer.keys)}
+              aria-pressed={on}
+              title={layer.title}
+              className={`rounded-md border px-2 py-0.5 font-mono text-[9px] font-semibold tracking-wide transition-colors ${
+                on
+                  ? "border-neon-cyan/50 bg-neon-cyan/15 text-neon-cyan"
+                  : "border-white/10 text-slate-500 hover:border-neon-cyan/30 hover:text-slate-300"
+              }`}
+            >
+              {layer.label}
+            </button>
+          );
+        })}
+        <button
+          onClick={() => applyLayer(LAYER_KEYS)}
+          title="Every layer's overlays at once. Useful for a final sweep, but this is the view the layers exist to break up — everything on is the state in which nothing stands out."
+          className="rounded-md border border-white/10 px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-500 transition-colors hover:border-neon-cyan/30 hover:text-slate-300"
+        >
+          ALL
+        </button>
+        <button
+          onClick={() => applyLayer([])}
+          title="Clear every layer overlay, leaving a bare chart. Overlays outside the layers — the candle inspector, trade levels, patterns — are left as you set them."
+          className="rounded-md border border-white/10 px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-500 transition-colors hover:border-bear/40 hover:text-slate-300"
+        >
+          CLEAR
         </button>
       </div>
 
