@@ -9,6 +9,7 @@ import { useInstitutional } from "@/hooks/useInstitutional";
 import { useFunding } from "@/hooks/useFunding";
 import RatesPanel from "@/components/panels/RatesPanel";
 import PositioningPanel from "@/components/panels/PositioningPanel";
+import ConflictPanel from "@/components/panels/ConflictPanel";
 import { useSeasonality } from "@/hooks/useSeasonality";
 import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
@@ -296,13 +297,22 @@ function Terminal() {
         </div>
       </div>
 
-      {/* Positioning, beneath the conclusion it qualifies. Funding says what
-          the crowded side is paying; this says whether the last few bars were
-          that crowd arriving or leaving — which is the difference between a
-          move with fuel behind it and one spending the last of it. */}
-      <div className="p-3 pt-0">
+      {/* Positioning and conflicts, beneath the conclusion they qualify.
+          Funding says what the crowded side is paying; positioning says
+          whether the last few bars were that crowd arriving or leaving; and
+          conflicts says which parts of all of it disagree — the part the
+          composite score averages away. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 xl:grid-cols-2">
         <div className="h-[560px]">
           <PositioningPanel candles={candles} openInterest={openInterest} timeframe={timeframe} />
+        </div>
+        <div className="h-[560px]">
+          <ConflictPanel
+            analysis={analysis}
+            candles={candles}
+            openInterest={openInterest}
+            funding={funding}
+          />
         </div>
       </div>
 
