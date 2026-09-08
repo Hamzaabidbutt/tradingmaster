@@ -1796,28 +1796,64 @@ export default function TradingChart({
       }
 
       if (rowsToDraw.length > 0) {
-        const baseY = h - 26;
+        /* How often a number fits. Computed once, before anything is painted:
+           it used to be checked *after* each row had already drawn its
+           background, so at a zoom too tight to print numbers the rows still
+           laid four opaque bands across the bottom of the chart — covering the
+           volume histogram and showing nothing in return. A row that cannot
+           say anything should not take the space. */
+        const showEvery = barWidth >= 34 ? 1 : barWidth >= 18 ? 2 : barWidth >= 10 ? 4 : 0;
+
+        // Clear of the time axis, which the overlay canvas also spans — the
+        // bottom row was previously drawing across the date labels.
+        let axisH = 28;
+        try {
+          const measured = ts.height();
+          if (Number.isFinite(measured) && measured > 0) axisH = measured;
+        } catch {
+          /* fall back to the constant */
+        }
+        const baseY = h - axisH - 6;
         ctx.font = "9px ui-monospace, monospace";
+
+        if (showEvery === 0) {
+          // One quiet line instead of the bands, so the rows are still
+          // discoverable without darkening the chart to say so.
+          const names = rowsToDraw.map((r) => r.label).join(" · ");
+          const text = `${names} — zoom in to read`;
+          ctx.textAlign = "left";
+          const wText = ctx.measureText(text).width;
+          ctx.fillStyle = "rgba(6,9,16,0.82)";
+          ctx.fillRect(3, baseY - 8, wText + 10, 15);
+          ctx.fillStyle = "rgba(148,163,184,0.9)";
+          ctx.fillText(text, 8, baseY + 3);
+          return;
+        }
+
         ctx.textAlign = "center";
 
         rowsToDraw.forEach((row, rowIdx) => {
           const y = baseY - (rowsToDraw.length - 1 - rowIdx) * ROW_H;
-          // Row background + label gutter.
-          ctx.fillStyle = "rgba(9,12,21,0.72)";
-          ctx.fillRect(0, y - ROW_H / 2, rightEdge, ROW_H);
-          ctx.strokeStyle = "rgba(255,255,255,0.05)";
+          const top = y - ROW_H / 2;
+          /* Near-opaque, not a wash. These rows are a numeric readout and the
+             candles behind them are noise for that job — at 0.72 the volume
+             histogram showed through and turned the whole strip muddy grey,
+             which is what made it unreadable rather than the text colour. */
+          ctx.fillStyle = "rgba(6,9,16,0.94)";
+          ctx.fillRect(0, top, rightEdge, ROW_H);
+          // A darker gutter so the label reads as a row header, not as a value.
+          ctx.fillStyle = "rgba(0,0,0,0.35)";
+          ctx.fillRect(0, top, 22, ROW_H);
+          ctx.strokeStyle = "rgba(255,255,255,0.12)";
+          ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.moveTo(0, y - ROW_H / 2);
-          ctx.lineTo(rightEdge, y - ROW_H / 2);
+          ctx.moveTo(0, top);
+          ctx.lineTo(rightEdge, top);
           ctx.stroke();
           ctx.textAlign = "left";
-          ctx.fillStyle = "rgba(139,147,167,0.9)";
+          ctx.fillStyle = "rgba(203,213,225,0.95)";
           ctx.fillText(row.label, 4, y + 3);
           ctx.textAlign = "center";
-
-          // Only print numbers when bars are wide enough to read them.
-          const showEvery = barWidth >= 34 ? 1 : barWidth >= 18 ? 2 : barWidth >= 10 ? 4 : 0;
-          if (showEvery === 0) return;
 
           for (let i = 0; i < candles.length; i++) {
             if (i % showEvery !== 0) continue;
