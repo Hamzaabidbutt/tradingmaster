@@ -68,13 +68,42 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
           "Order-flow events named by side: SUPPLY ABSORBED (selling ate by resting bids, bullish) vs DEMAND ABSORBED (buying ate by resting offers, bearish); BUYERS / SELLERS EXHAUSTED; and trapped traders. Absorption also draws its price as a level.",
       },
       { key: "bigTrades", label: "BIG", title: "Large-order bubbles" },
+      {
+        key: "contractBubbles",
+        label: "CONTRACTS",
+        title:
+          "A bubble on every candle sized by contracts traded and split buy against sell, with the counts printed when the bars are wide enough. Colour follows net taker delta — who crossed the spread — not the candle's direction. Needs room: zoomed out past a few pixels a bar it draws nothing rather than a smear.",
+      },
+      {
+        key: "aggressiveCandles",
+        label: "AGGR",
+        title:
+          "Candles where one side crossed the spread on real volume: 68%+ of takers on one side AND above-average participation. Skew alone marks a third of every quiet session, so both are required.",
+      },
+      {
+        key: "stackedImbalance",
+        label: "STACK",
+        title:
+          "Candles carrying three or more consecutive footprint imbalances on the same side, bracketed over the price range they span. Requires the footprint — reconstructed footprints mark shape, not exact levels.",
+      },
       { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
     ],
   },
   {
     group: "Levels",
     items: [
-      { key: "volumeProfile", label: "VP", title: "Volume profile: POC, value area, LVNs" },
+      {
+        key: "volumeProfile",
+        label: "VP",
+        title:
+          "Volume profile: POC, value area, and both node types — HVN (price the market accepted and keeps returning to) and LVN (price it rejected and tends to travel through quickly).",
+      },
+      {
+        key: "deltaProfile",
+        label: "ΔVP",
+        title:
+          "Delta volume profile: the same price bins, but showing NET taker delta rather than total volume. Volume says where trading happened; this says who won at each price — buyers to the right, sellers to the left of a zero axis.",
+      },
       { key: "vwap", label: "VWAP", title: "Session VWAP" },
       { key: "movingAverages", label: "MA", title: "Key moving averages (EMA 9/21/50, SMA 100/200)" },
       { key: "fibonacci", label: "FIB", title: "Auto Fibonacci with golden pocket" },
