@@ -87,6 +87,18 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
         title:
           "Candles carrying three or more consecutive footprint imbalances on the same side, bracketed over the price range they span. Requires the footprint — reconstructed footprints mark shape, not exact levels.",
       },
+      {
+        key: "squeezeCandles",
+        label: "SHAKEOUT",
+        title:
+          "Bars where the trend's OWN side was liquidated: shorts forced out in a downtrend, longs in an uptrend. A downtrend liquidating longs is just the trend working and is never marked — the marked bars are the ones where the people positioned correctly were removed, which both clears the fuel under the move and is where trend-followers are worst placed.",
+      },
+      {
+        key: "cvdDivergence",
+        label: "CVD DIV",
+        title:
+          "Price and cumulative delta pulling opposite ways, drawn as two lines rather than a label — the claim is about slope, and a marginal divergence and a screaming one look identical labelled. Higher high on falling delta is distribution; lower low on rising delta is accumulation. Not a reversal signal: divergences persist, and many end by ceasing to diverge.",
+      },
       { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
     ],
   },
@@ -192,6 +204,8 @@ const LAYER_PRESETS: { id: string; label: string; title: string; keys: (keyof Ov
       "aggressiveCandles",
       "stackedImbalance",
       "cvd",
+      "cvdDivergence",
+      "squeezeCandles",
       "bigTrades",
     ],
   },
