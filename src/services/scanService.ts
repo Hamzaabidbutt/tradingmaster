@@ -20,6 +20,7 @@ import { detectCascadeRisk } from "@/engines/cascadeRisk";
 import { detectBullishEngulfing } from "@/engines/engulfing";
 import { detectInstitutional } from "@/engines/institutional";
 import { detectRecovery } from "@/engines/recovery";
+import { BosMomentumSetup, BosState, detectBosMomentum } from "@/engines/bosMomentum";
 import { analyzeMarket } from "@/engines/analyzer";
 import { evaluateStrategies } from "@/engines/strategies";
 import { getStrategyWeights } from "./signalService";
@@ -1304,4 +1305,120 @@ export function mergeScans(live: UniverseScan, persisted: ScanEntry[]): Universe
   merged.partial = live.partial;
   merged.scannedAt = live.scannedAt;
   return merged;
+}
+
+/* ------------------------------------------------------------------ *
+ * BOS momentum sweep
+ * ------------------------------------------------------------------ */
+
+export interface BosEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  /**
+   * Open time of the last closed bar this read was built from, unix seconds.
+   *
+   * A scan-level "12m ago" says when the sweep ran; this says how fresh the
+   * *data* under one row is, which is a different number whenever a symbol
+   * is on a slow timeframe. Rendered in the reader's own clock.
+   */
+  barTime: number;
+  setup: BosMomentumSetup;
+}
+
+/**
+ * Results grouped by state rather than ranked into one list.
+ *
+ * A single ranked list is the wrong shape for this scan, because the states
+ * are not degrees of the same thing — a held retest and an extended run are
+ * different situations, and the extended one is not simply a worse version of
+ * the held one. Sorting them together would put a high-momentum break with no
+ * remaining entry above a lower-momentum one that is actually tradable.
+ */
+export interface BosScan {
+  timeframe: string;
+  /** price came back to the broken level and held it */
+  held: BosEntry[];
+  /** at the level right now — the decision bar */
+  retesting: BosEntry[];
+  /** broken and gone, waiting for a return that may not come */
+  pending: BosEntry[];
+  /** the break bar is the most recent close */
+  fresh: BosEntry[];
+  /** came back and traded through: the break failed */
+  failed: BosEntry[];
+  /** ran without a retest; the entry geometry is gone */
+  extended: BosEntry[];
+  /** pressing an unbroken level — the watchlist */
+  forming: BosEntry[];
+  scanned: number;
+  failed_count: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for breaks of structure that had something behind them.
+ *
+ * Defaults to 1h. Below that the universe breaks structure constantly and the
+ * lists fill with noise; above it the sweep finds a handful of symbols a day.
+ * The engine's own filters do the refusing — this only groups and orders.
+ */
+export async function scanBosMomentum(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<BosScan> {
+  const ranked = takeDepth(await rankUniverse(), opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? DEFAULT_CONCURRENCY, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      setup: detectBosMomentum(r.symbol, opts.timeframe, candles),
+      barTime: candles[candles.length - 1]?.time ?? 0,
+    } satisfies BosEntry;
+  });
+
+  const entries: BosEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    // undefined = the deadline hit before this symbol was reached. Not a
+    // failure — counting it as one would report a healthy sweep as broken.
+    if (!res) continue;
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byMomentum = (a: BosEntry, b: BosEntry) => b.setup.momentum - a.setup.momentum;
+  const inState = (...states: BosState[]) =>
+    entries.filter((e) => states.includes(e.setup.state)).sort(byMomentum);
+
+  return {
+    timeframe: opts.timeframe,
+    held: inState("retest_held"),
+    retesting: inState("retesting"),
+    pending: inState("retest_pending"),
+    fresh: inState("fresh_break"),
+    /* Failures are capped but never hidden. A break that did not hold is the
+       most informative row on the page — it says the level is now a failure
+       point, and everyone positioned for the break is offside. */
+    failed: inState("retest_failed").slice(0, 20),
+    extended: inState("extended").slice(0, 20),
+    // The watchlist is the longest list by far, so it is trimmed hardest:
+    // approaching a level is the weakest thing on the page.
+    forming: entries
+      .filter((e) => e.setup.state === "forming")
+      .sort((a, b) => Math.abs(a.setup.distanceAtr) - Math.abs(b.setup.distanceAtr))
+      .slice(0, 20),
+    scanned: entries.length,
+    failed_count: failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
 }
