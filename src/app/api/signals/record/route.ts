@@ -107,6 +107,8 @@ const MIN_SAMPLE = 10;
  */
 function slice(label: string, rows: RecordRow[]): RecordSlice {
   const counts: Record<OutcomeBucket, number> = {
+    pending: 0,
+    unfilled: 0,
     active: 0,
     successful: 0,
     breakeven: 0,
@@ -220,6 +222,8 @@ export async function GET(req: NextRequest) {
     }));
 
     const counts: Record<OutcomeBucket, number> = {
+      pending: 0,
+      unfilled: 0,
       active: 0,
       successful: 0,
       breakeven: 0,

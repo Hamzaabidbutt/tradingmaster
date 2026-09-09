@@ -8,6 +8,7 @@ import { buildTradeRetrospective, computeWeightAdjustments } from "@/engines/lea
 import { buildVerdicts } from "@/engines/confluence";
 import { classifyOutcome, computeExcursion, OutcomeSignal } from "@/engines/outcome";
 import { isBreakEvenExit, manageTrade, ManagedPosition } from "@/engines/tradeManagement";
+import { checkFill, fillsImmediately } from "@/engines/fills";
 import { getMarketRegime } from "./regimeService";
 import {
   AnalystVerdict,
@@ -134,9 +135,30 @@ export async function analyzeSymbol(
  */
 async function slotOccupied(symbol: string, timeframe: string): Promise<boolean> {
   const existing = await prisma.signal.findFirst({
-    where: { symbol, timeframe, status: "ACTIVE", shadow: { not: true } },
+    // PENDING counts as occupying the slot. It is an order resting on this
+    // pair, and letting a second signal in beside it would stack duplicate
+    // entries on the same setup while the first was still waiting to fill.
+    where: { symbol, timeframe, status: { in: ["PENDING", "ACTIVE"] }, shadow: { not: true } },
   });
   return existing !== null;
+}
+
+/**
+ * The status a freshly published signal should carry.
+ *
+ * A limit that is already marketable is open the moment it is written; one
+ * that needs price to come to it is not open at all yet, and must not be
+ * treated as a position until it fills.
+ */
+function openingState(
+  side: string,
+  entry: number,
+  price: number
+): { status: "PENDING" | "ACTIVE"; filledAt: Date | null; barsToFill: number | null } {
+  const immediate = fillsImmediately(side === "BUY" ? "BUY" : "SELL", entry, price);
+  return immediate
+    ? { status: "ACTIVE", filledAt: new Date(), barsToFill: 0 }
+    : { status: "PENDING", filledAt: null, barsToFill: null };
 }
 
 /**
@@ -170,6 +192,8 @@ export async function maybePersistSignal(analysis: FullAnalysis): Promise<string
 
     const signal = await prisma.signal.create({
       data: {
+        // PENDING unless the entry was already marketable — see openingState.
+        ...openingState(setup.side, setup.entry, analysis.price),
         symbol: analysis.symbol,
         timeframe: analysis.timeframe,
         side: setup.side,
@@ -270,6 +294,7 @@ export async function maybePersistConfluenceSignal(
 
     const signal = await prisma.signal.create({
       data: {
+        ...openingState(side, entry, setup.price),
         symbol: setup.symbol,
         timeframe: setup.timeframe,
         side,
@@ -373,6 +398,7 @@ export async function maybePersistCompositeSignal(
 
     const signal = await prisma.signal.create({
       data: {
+        ...openingState(setup.side, setup.entry, snapshot.price),
         symbol,
         timeframe,
         side: setup.side,
@@ -452,6 +478,7 @@ export async function maybePersistInstitutionalSignal(
 
     const signal = await prisma.signal.create({
       data: {
+        ...openingState(trade.side, trade.entry, setup.price),
         symbol: setup.symbol,
         timeframe: setup.timeframe,
         side: trade.side,
@@ -534,8 +561,54 @@ export async function maybePersistInstitutionalSignal(
 /**
  * Evaluate open signals against current prices: mark TP/SL hits, close
  * finished trades and feed the outcome into the learning engine.
+ *
+ * PENDING signals are handled first and separately. They have no position, so
+ * none of the exit logic below applies to them — they either fill and become
+ * ACTIVE, or they stop being worth waiting for and become UNFILLED. Running
+ * the profit-and-loss path over an unfilled entry is exactly the phantom fill
+ * this state exists to prevent.
  */
 export async function evaluateOpenSignals(): Promise<{ evaluated: number; closed: number }> {
+  const pending = await prisma.signal.findMany({ where: { status: "PENDING" } });
+  for (const sig of pending) {
+    try {
+      const openedAt = Math.floor(sig.createdAt.getTime() / 1000);
+      const bars = await fetchKlines(sig.symbol, sig.timeframe, 300).catch(() => []);
+      const fill = checkFill({
+        side: sig.side as "BUY" | "SELL",
+        entry: sig.entry,
+        stopLoss: sig.stopLoss,
+        openedAt,
+        bars,
+        estHoldingMin: sig.estHoldingMin,
+      });
+      if (fill.state === "waiting") continue;
+
+      if (fill.state === "filled") {
+        await prisma.signal.update({
+          where: { id: sig.id },
+          data: {
+            status: "ACTIVE",
+            filledAt: new Date((fill.filledAt ?? openedAt) * 1000),
+            barsToFill: fill.barsWaited,
+          },
+        });
+        logger.info("signals.filled", { id: sig.id, symbol: sig.symbol, bars: fill.barsWaited });
+      } else {
+        /* Never filled. Closed with no P/L at all rather than a zero — a zero
+           would sit in the average and drag every rate toward nothing, which
+           is a different lie from the one we started with. */
+        await prisma.signal.update({
+          where: { id: sig.id },
+          data: { status: "UNFILLED", closedAt: new Date(), earlyExitReason: fill.reason },
+        });
+        logger.info("signals.unfilled", { id: sig.id, symbol: sig.symbol, reason: fill.reason });
+      }
+    } catch (err) {
+      logger.warn("signals.fill_check_failed", { id: sig.id, error: String(err) });
+    }
+  }
+
   const open = await prisma.signal.findMany({ where: { status: { in: ["ACTIVE", "TP1_HIT", "TP2_HIT"] } } });
   let closed = 0;
 

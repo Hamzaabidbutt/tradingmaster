@@ -33,6 +33,8 @@ const MIN_SAMPLE = 10;
 /** The record route's slice reducer, mirrored. */
 function slice(rows: Row[]) {
   const counts: Record<OutcomeBucket, number> = {
+    pending: 0,
+    unfilled: 0,
     active: 0,
     successful: 0,
     breakeven: 0,

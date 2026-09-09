@@ -36,7 +36,15 @@ import { OutcomeAnalysis } from "./types";
  * former is the honest way to describe it.
  */
 
-export type OutcomeBucket = "active" | "successful" | "breakeven" | "failed";
+export type OutcomeBucket =
+  /** published, waiting for price to reach the entry — no position yet */
+  | "pending"
+  /** published, price never came, closed without ever being a position */
+  | "unfilled"
+  | "active"
+  | "successful"
+  | "breakeven"
+  | "failed";
 
 export const ACTIVE_STATUSES = ["ACTIVE", "TP1_HIT", "TP2_HIT"] as const;
 /** Statuses that end a signal and carry a realised P/L. */
@@ -71,6 +79,13 @@ export function reachedFirstTarget(signal: BucketInput): boolean {
 }
 
 export function classifyBucket(signal: BucketInput): OutcomeBucket {
+  /* These two come first and are not optional. Neither status is in
+     ACTIVE_STATUSES, so without an explicit case both fell through the whole
+     chain to "failed" — a signal whose entry price was never reached would
+     have been recorded as a losing trade, which is the phantom-fill bug
+     wearing the opposite sign. */
+  if (signal.status === "PENDING") return "pending";
+  if (signal.status === "UNFILLED") return "unfilled";
   if (isActiveStatus(signal.status)) return "active";
   // Reaching the first target is the claim the signal actually made, so it
   // outranks the closing price: a trade that ran to TP1 and was then walked
@@ -115,6 +130,8 @@ export function winRate(counts: Record<OutcomeBucket, number>): number | null {
 }
 
 export const BUCKET_LABEL: Record<OutcomeBucket, string> = {
+  pending: "Waiting to fill",
+  unfilled: "Never filled",
   active: "Running",
   successful: "Successful — reached TP1",
   breakeven: "Break-even — protected, then retraced",

@@ -28,6 +28,18 @@ enum SignalSide {
 }
 
 enum SignalStatus {
+  /// Published but not filled. The entry is a *limit* price, and until price
+  /// actually trades there the position does not exist — so it cannot have a
+  /// profit or a loss, and it must not appear in any performance figure.
+  ///
+  /// Without this state the record booked P/L from the entry price of every
+  /// signal whether or not it was ever reachable, which flatters the results
+  /// in one specific direction: setups whose entry price ran away are exactly
+  /// the ones that were about to move, so the unfilled set is not a random
+  /// sample of the whole.
+  PENDING
+  /// Filled — price traded at or through the entry. Only from here on does
+  /// the signal have a position and therefore a result.
   ACTIVE
   TP1_HIT
   TP2_HIT
@@ -35,6 +47,11 @@ enum SignalStatus {
   STOPPED
   EXPIRED
   CANCELLED
+  /// Published, never filled, and no longer worth waiting for — either the
+  /// setup aged out or price left the entry behind. Kept rather than deleted:
+  /// how often entries go unfilled is a fact about the engine's pricing, and
+  /// deleting them would hide it.
+  UNFILLED
   /// Closed at a stop that had already been moved to entry or better. Its own
   /// status because it is neither a win nor a loss: counted as a loss, active
   /// management would look like it damages the record; counted as a win, the
@@ -110,6 +127,15 @@ model Signal {
   closedPrice      Float?
   closedAt         DateTime?
   createdAt        DateTime     @default(now())
+  /// When price actually traded at the entry. Null while PENDING, and null
+  /// forever on an UNFILLED signal. Nullable rather than defaulted because
+  /// every signal written before fills were checked genuinely has no answer —
+  /// backfilling a timestamp would assert a fill that was never verified.
+  filledAt         DateTime?
+  /// Bars waited between publication and the fill. Recorded so "our entries
+  /// are unreachable" and "our entries fill instantly at the worst price" are
+  /// distinguishable rather than both showing up as a win rate.
+  barsToFill       Int?
 
   // --- Attribution & outcome (all nullable on purpose) ---
   //

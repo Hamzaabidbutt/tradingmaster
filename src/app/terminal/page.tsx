@@ -10,6 +10,7 @@ import { useFunding } from "@/hooks/useFunding";
 import RatesPanel from "@/components/panels/RatesPanel";
 import PositioningPanel from "@/components/panels/PositioningPanel";
 import ConflictPanel from "@/components/panels/ConflictPanel";
+import Foldable from "@/components/layout/Foldable";
 import StateCard from "@/components/panels/StateCard";
 import { useSeasonality } from "@/hooks/useSeasonality";
 import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
@@ -223,7 +224,7 @@ function Terminal() {
           the chart because a read formed after scrolling past seventeen panels
           is a read assembled from whichever ones were remembered. */}
       <div className="p-3 pb-0">
-        <div className="h-[420px]">
+        <Foldable id="state" label="Market state" height={420}>
           <StateCard
             analysis={analysis}
             candles={candles}
@@ -231,7 +232,7 @@ function Terminal() {
             funding={funding}
             pricePrecision={pricePrecision}
           />
-        </div>
+        </Foldable>
       </div>
 
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -307,12 +308,12 @@ function Terminal() {
           the side it favours. Fixed heights keep every panel's own body
           scrollable rather than letting content overflow and get clipped. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className="h-[640px]">
+        <Foldable id="signal" label="Pulse & Setup" height={640}>
           <SignalPanel analysis={analysis} pricePrecision={pricePrecision} />
-        </div>
-        <div className="h-[640px]">
+        </Foldable>
+        <Foldable id="rates" label="Interest & Funding" height={640}>
           <RatesPanel report={funding} symbol={symbol} />
-        </div>
+        </Foldable>
       </div>
 
       {/* Positioning and conflicts, beneath the conclusion they qualify.
@@ -321,17 +322,17 @@ function Terminal() {
           conflicts says which parts of all of it disagree — the part the
           composite score averages away. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 xl:grid-cols-2">
-        <div className="h-[560px]">
+        <Foldable id="positioning" label="Positioning" height={560}>
           <PositioningPanel candles={candles} openInterest={openInterest} timeframe={timeframe} />
-        </div>
-        <div className="h-[560px]">
+        </Foldable>
+        <Foldable id="conflicts" label="Conflicts" height={560}>
           <ConflictPanel
             analysis={analysis}
             candles={candles}
             openInterest={openInterest}
             funding={funding}
           />
-        </div>
+        </Foldable>
       </div>
 
       {/* Evidence for the pulse above it: the ladder, and the read taken off
@@ -339,28 +340,31 @@ function Terminal() {
           width, so the old arrangement of a mobile copy under the AI feed plus
           a desktop copy down in the deep-dive row has nothing left to solve. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 xl:grid-cols-2">
-        <div className="h-[560px]">
+        <Foldable id="footprint" label="Footprint" height={560}>
           <FootprintPanel analysis={analysis} />
-        </div>
-        <div className="h-[560px]">
+        </Foldable>
+        <Foldable id="orderflow" label="Order Flow" height={560}>
           <OrderFlowPanel analysis={analysis} />
-        </div>
+        </Foldable>
       </div>
 
       {/* The multi-window read, below the single-window one it generalises. */}
       <div className="p-3 pt-0">
-        <div className="h-[640px]">
+        <Foldable id="multiwindow" label="Multi-Window Read" height={640}>
           <MultiWindowPanel analysis={analysis} pricePrecision={pricePrecision} />
-        </div>
+        </Foldable>
       </div>
 
       {/* Independent analysts. These three read the chart on their own terms
           and never feed the composite signal above — they are deliberately a
           separate opinion, not another input to it. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 md:grid-cols-2 2xl:grid-cols-3">
-        <div className="h-[600px]"><ChartAnalystPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
-        <div className="h-[600px]"><CandleCloseExpansionPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
-        <div className="h-[600px]"><RangeTradingPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
+        <Foldable id="chartanalyst" label="Chart Analyst" height={600}>
+          <ChartAnalystPanel analysis={analysis} pricePrecision={pricePrecision} /></Foldable>
+        <Foldable id="candleclose" label="Candle Close Expansion" height={600}>
+          <CandleCloseExpansionPanel analysis={analysis} pricePrecision={pricePrecision} /></Foldable>
+        <Foldable id="range" label="Range Trading" height={600}>
+          <RangeTradingPanel analysis={analysis} pricePrecision={pricePrecision} /></Foldable>
       </div>
 
       {/* Core intelligence row. Order flow used to lead here; it now follows
@@ -368,45 +372,50 @@ function Terminal() {
           order-flow read is the conclusion drawn from it — reading them in
           that order costs nothing and saves scrolling back up. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 md:grid-cols-2 2xl:grid-cols-3">
-        <div className="h-[560px]"><LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></div>
-        <div className="h-[560px]"><StructurePanel analysis={analysis} /></div>
-        <div className="h-[560px]"><WhaleOrdersPanel analysis={analysis} pricePrecision={pricePrecision} /></div>
+        <Foldable id="liquidation" label="Liquidation Engine" height={560}>
+          <LiquidationPanel analysis={analysis} liveLiquidations={liquidations} /></Foldable>
+        <Foldable id="structure" label="Market Structure" height={560}>
+          <StructurePanel analysis={analysis} /></Foldable>
+        <Foldable id="whales" label="Whale Orders" height={560}>
+          <WhaleOrdersPanel analysis={analysis} pricePrecision={pricePrecision} /></Foldable>
       </div>
 
       {/* Order-flow deep dive: volume profile and absorption/exhaustion. The
           footprint and the order-flow read moved up under the pulse, so what
           is left here is the pair that stands on its own. */}
       <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 lg:grid-cols-2">
-        <div className="h-[600px]"><VolumeProfilePanel analysis={analysis} /></div>
-        <div className="h-[600px]"><OrderFlowEventsPanel analysis={analysis} /></div>
+        <Foldable id="volprofile" label="Volume Profile" height={600}>
+          <VolumeProfilePanel analysis={analysis} /></Foldable>
+        <Foldable id="flowevents" label="Absorption & Traps" height={600}>
+          <OrderFlowEventsPanel analysis={analysis} /></Foldable>
       </div>
 
       {/* Forced-flow map. */}
       <div className="hidden p-3 pt-0 xl:block">
-        <div className="h-[620px]">
+        <Foldable id="pressuremap" label="Squeeze & Liquidation Map" height={620}>
           <PressureMapPanel analysis={analysis} pricePrecision={pricePrecision} />
-        </div>
+        </Foldable>
       </div>
 
       {/* Levels & patterns */}
       <div className="p-3 pt-0">
-        <div className="h-[460px]">
+        <Foldable id="levels" label="Key Levels" height={460}>
           <LevelsPanel analysis={analysis} />
-        </div>
+        </Foldable>
       </div>
 
       {/* The clock. Last on the page because it is the slowest-moving thing
           here — a year-long profile does not change between visits — and
           because it is context for everything above rather than a live read. */}
       <div className="p-3 pt-0">
-        <div className="h-[680px]">
+        <Foldable id="seasonality" label="Time & Seasonality" height={680}>
           <SeasonalityPanel
             report={seasonality}
             loading={seasonalityLoading}
             error={seasonalityError}
             symbol={symbol}
           />
-        </div>
+        </Foldable>
       </div>
     </AppShell>
   );

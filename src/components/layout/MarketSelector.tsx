@@ -5,6 +5,7 @@ import { TIMEFRAMES } from "@/lib/config";
 import { OverlayToggles, useMarketStore } from "@/stores/marketStore";
 import { useSymbols } from "@/hooks/useSymbols";
 import SymbolSearch from "./SymbolSearch";
+import MtfRibbon from "@/components/chart/MtfRibbon";
 
 /** Overlay toggles grouped so the control strip stays readable. */
 const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label: string; title: string }[] }[] = [
@@ -291,10 +292,13 @@ export default function MarketSelector({
         </button>
       </div>
 
-      {/* Reading layers. Above the toggle list because it is the coarser
-          control: pick the pass you are on, then reach for individual
+      {/* Reading layers, and the higher clocks beside them. Above the toggle
+          list because both are coarser controls: pick the pass you are on and
+          check what the bigger timeframes say, then reach for individual
           switches only if that pass needs adjusting. */}
       <div className="flex flex-wrap items-center gap-1">
+        <MtfRibbon symbol={symbol} />
+        <span className="mx-1 h-3 w-px bg-white/10" />
         <span
           className="mr-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500"
           title="One click per stage of a chart read. Work through them in order: regime decides which playbook applies, location decides whether the price is worth acting from, structure says who has the burden of proof, flow says who is acting now, position says who is already committed. Flow without location is noise; location without flow is a hope."

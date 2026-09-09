@@ -30,11 +30,28 @@ export const dynamic = "force-dynamic";
  * filters and the dashboard counts always agree.
  */
 
-type Outcome = "active" | "successful" | "breakeven" | "failed" | "expired";
+/* "pending" and "unfilled" are listable but are not outcomes in the scoring
+   sense — neither ever became a position, so neither can be a win or a loss.
+   They are here so the unfill rate is inspectable, which is a fact about the
+   engine's pricing rather than about its accuracy. */
+type Outcome =
+  | "active"
+  | "successful"
+  | "breakeven"
+  | "failed"
+  | "expired"
+  | "pending"
+  | "unfilled";
 
 function isOutcome(v: string | null): v is Outcome {
   return (
-    v === "active" || v === "successful" || v === "breakeven" || v === "failed" || v === "expired"
+    v === "active" ||
+    v === "successful" ||
+    v === "breakeven" ||
+    v === "failed" ||
+    v === "expired" ||
+    v === "pending" ||
+    v === "unfilled"
   );
 }
 
@@ -75,7 +92,11 @@ export async function GET(req: NextRequest) {
   // Statuses the requested outcome allows. `successful`/`failed` narrow further
   // in memory below, because the P/L sign is part of the definition.
   const statusFilter: Prisma.SignalWhereInput = outcome
-    ? outcome === "active"
+    ? outcome === "pending"
+      ? { status: "PENDING" }
+      : outcome === "unfilled"
+        ? { status: "UNFILLED" }
+        : outcome === "active"
       ? { status: { in: [...ACTIVE_STATUSES] } }
       : outcome === "successful" || outcome === "failed" || outcome === "breakeven"
         ? { status: { in: [...RESOLVED_STATUSES] } }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BUCKET_LABEL,
   bucketScore,
   classifyBucket,
   isActiveStatus,
@@ -127,18 +128,53 @@ describe("bucketScore and winRate", () => {
     // 6 wins, 4 losses and 10 break-evens is a 60% win rate, not 30%.
     // Scoring break-evens zero would let a trader improve their measured
     // accuracy by managing their trades *worse*, which is backwards.
-    const counts = { active: 3, successful: 6, breakeven: 10, failed: 4 };
+    const counts = { pending: 0, unfilled: 0, active: 3, successful: 6, breakeven: 10, failed: 4 };
     expect(resolvedCount(counts)).toBe(10);
     expect(winRate(counts)).toBe(60);
   });
 
   it("withholds a rate when nothing has decided", () => {
-    expect(winRate({ active: 5, successful: 0, breakeven: 3, failed: 0 })).toBeNull();
+    expect(winRate({ pending: 0, unfilled: 0, active: 5, successful: 0, breakeven: 3, failed: 0 })).toBeNull();
   });
 
   it("never lets running trades pad the denominator", () => {
-    const counts = { active: 40, successful: 3, breakeven: 0, failed: 1 };
+    const counts = { pending: 0, unfilled: 0, active: 40, successful: 3, breakeven: 0, failed: 1 };
     expect(resolvedCount(counts)).toBe(4);
     expect(winRate(counts)).toBe(75);
+  });
+});
+
+describe("unfilled signals are not results", () => {
+  /* The failure this guards is precise: neither status is in ACTIVE_STATUSES,
+     so without their own cases both fell through every branch to "failed" — a
+     signal whose entry price was never reached would have been recorded as a
+     losing trade. That is the phantom-fill bug with the sign reversed, and it
+     would have made the record worse than useless rather than merely
+     flattering. */
+  it("classifies a pending signal as pending, not failed", () => {
+    expect(classifyBucket({ status: "PENDING", resultPnlPct: null })).toBe("pending");
+  });
+
+  it("classifies an unfilled signal as unfilled, not failed", () => {
+    expect(classifyBucket({ status: "UNFILLED", resultPnlPct: null })).toBe("unfilled");
+  });
+
+  it("keeps both out of the win-rate denominator", () => {
+    const counts = { pending: 12, unfilled: 30, active: 2, successful: 6, breakeven: 1, failed: 4 };
+    // Forty-two signals that never became positions change nothing.
+    expect(resolvedCount(counts)).toBe(10);
+    expect(winRate(counts)).toBe(60);
+  });
+
+  it("scores neither of them", () => {
+    expect(bucketScore("pending")).toBe(0);
+    expect(bucketScore("unfilled")).toBe(0);
+  });
+
+  it("labels both without calling them wins or losses", () => {
+    for (const b of ["pending", "unfilled"] as const) {
+      const label = BUCKET_LABEL[b].toLowerCase();
+      expect(label).not.toMatch(/success|fail|win|loss/);
+    }
   });
 });
