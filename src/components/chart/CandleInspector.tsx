@@ -79,6 +79,89 @@ const SECTION_LABEL: Record<StoryLine["section"], string> = {
  * alike, so the handle drags identically — `touch-none` is what stops the
  * browser claiming the gesture for a scroll first.
  */
+/**
+ * Is this a narrow (phone-sized) viewport?
+ *
+ * Matched on the media query rather than on a user-agent string, because what
+ * actually decides the layout here is available width — a desktop window
+ * dragged narrow has the same problem a phone does, and a tablet in landscape
+ * does not.
+ */
+function useNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const apply = () => setNarrow(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  return narrow;
+}
+
+/**
+ * The phone layout: one horizontal strip, and only while a bar is hovered.
+ *
+ * The floating card is a desktop affordance. On a phone it covers a
+ * meaningful share of the chart it is annotating, and there is nowhere to
+ * drag it *to* — every position is over the candles. So on narrow viewports
+ * the card becomes a single scrollable row pinned to the top of the screen,
+ * and it appears only while a bar is actually being touched: a permanent
+ * strip would cost the same screen space as the card without the drag handle
+ * that made the card tolerable.
+ */
+function MobileStrip({
+  stats,
+  pricePrecision,
+}: {
+  stats: CandleStats;
+  pricePrecision: number;
+}) {
+  const p = (v: number) => v.toFixed(pricePrecision);
+  const when = new Date(stats.time * 1000);
+  const cell = (label: string, value: string, tone = "text-slate-200") => (
+    <span key={label} className="flex shrink-0 items-baseline gap-1">
+      <span className="text-[8px] uppercase tracking-wider text-slate-500">{label}</span>
+      <span className={`font-mono text-[10px] ${tone}`}>{value}</span>
+    </span>
+  );
+
+  return (
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-base-900/95 px-2 py-1.5 shadow-glass backdrop-blur-xl">
+      <div className="flex items-center gap-3 overflow-x-auto whitespace-nowrap">
+        <span
+          className={`shrink-0 font-mono text-[11px] font-bold ${stats.bullish ? "text-bull" : "text-bear"}`}
+        >
+          {stats.bullish ? "▲" : "▼"} {stats.changePct >= 0 ? "+" : ""}
+          {stats.changePct.toFixed(2)}%
+        </span>
+        <span className="shrink-0 font-mono text-[9px] text-slate-500">
+          {when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </span>
+        {cell("O", p(stats.open))}
+        {cell("H", p(stats.high))}
+        {cell("L", p(stats.low))}
+        {cell("C", p(stats.close), stats.bullish ? "text-bull" : "text-bear")}
+        {cell("VOL", fmt(stats.volume))}
+        {stats.volumeMultiple != null && cell("×", `${stats.volumeMultiple.toFixed(2)}`)}
+        {cell(
+          "Δ",
+          `${stats.deltaVolume >= 0 ? "+" : ""}${fmt(stats.deltaVolume)}`,
+          stats.deltaVolume >= 0 ? "text-bull" : "text-bear"
+        )}
+        {cell("BUY", `${stats.buyPct.toFixed(0)}%`)}
+        {stats.liquidationDelta != null &&
+          cell(
+            "LIQΔ",
+            `${stats.liquidationDelta >= 0 ? "+" : ""}${fmt(stats.liquidationDelta)}`,
+            stats.liquidationDelta >= 0 ? "text-bull" : "text-bear"
+          )}
+        {stats.cvd != null && cell("CVD", fmt(stats.cvd))}
+      </div>
+    </div>
+  );
+}
+
 export default function CandleInspector({
   stats,
   pricePrecision,
@@ -120,6 +203,7 @@ export default function CandleInspector({
   const p = (v: number) => v.toFixed(pricePrecision);
   const when = new Date(stats.time * 1000);
 
+  const narrow = useNarrowViewport();
   const cardRef = useRef<HTMLDivElement>(null);
   const grabRef = useRef<InspectorPosition | null>(null);
   const [storyOpen, setStoryOpen] = useState(true);
@@ -210,6 +294,16 @@ export default function CandleInspector({
   );
 
   if (!mounted) return null;
+
+  /* Narrow viewport: strip instead of card, and only while a bar is actually
+     hovered. `live` means nothing is hovered and this is the newest bar — the
+     desktop card falls back to it so it is never blank, but on a phone that
+     fallback is a permanent band across the top for a bar the user did not
+     ask about. */
+  if (narrow) {
+    if (live) return null;
+    return createPortal(<MobileStrip stats={stats} pricePrecision={pricePrecision} />, document.body);
+  }
 
   const card = (
     // pointer-events-none throughout: the card sits over the candles, and a

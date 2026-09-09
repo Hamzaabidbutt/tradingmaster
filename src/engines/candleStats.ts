@@ -49,7 +49,15 @@ export function computeCandleStats(
   candles: Candle[],
   analysis: FullAnalysis | null
 ): CandleStats {
-  const buyVolume = candle.takerBuyVolume ?? candle.volume / 2;
+  /* Clamped to the bar's own volume. Taker buy volume is a *subset* of volume
+     by definition, so a value above it is malformed input rather than a real
+     reading — but it does reach us: candles arrive from the server and, when
+     that is geo-blocked, from a direct browser fetch, and a mis-parse in
+     either path would otherwise surface as a buy share over 100%. Guarding
+     here keeps an impossible number off the screen without pretending the
+     source is trustworthy. */
+  const rawBuy = candle.takerBuyVolume ?? candle.volume / 2;
+  const buyVolume = Math.min(Math.max(rawBuy, 0), candle.volume);
   const sellVolume = candle.volume - buyVolume;
   const range = candle.high - candle.low;
 

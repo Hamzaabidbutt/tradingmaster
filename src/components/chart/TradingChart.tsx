@@ -24,6 +24,8 @@ import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleS
 import { buildCandleStory } from "@/engines/candleStory";
 import { findStrongCandles } from "@/engines/strongCandles";
 import { findAggressiveCandles, strongestPerRun } from "@/engines/aggressiveCandles";
+import { findSqueezeCandles, strongestSqueezePerRun } from "@/engines/squeezeCandles";
+import { findCvdDivergences } from "@/engines/cvdDivergence";
 import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
@@ -734,6 +736,27 @@ export default function TradingChart({
     [overlays.aggressiveCandles, candles]
   );
 
+  /** Bars where the trend's own side was liquidated — the shakeout. */
+  const shakeouts = useMemo(
+    () =>
+      overlays.squeezeCandles && analysis
+        ? findSqueezeCandles(candles, analysis.liquidationDelta.series)
+        : [],
+    [overlays.squeezeCandles, candles, analysis]
+  );
+
+  /** Price against cumulative delta, as pairs of points to draw lines through. */
+  const divergences = useMemo(
+    () =>
+      overlays.cvdDivergence && analysis
+        ? findCvdDivergences(
+            candles,
+            analysis.delta.series.map((d) => ({ time: d.time, cvd: d.cvd }))
+          )
+        : [],
+    [overlays.cvdDivergence, candles, analysis]
+  );
+
   // --- Markers: structure, sweeps, patterns, order-flow events ---
   const markers = useMemo<SeriesMarker<Time>[]>(() => {
     const out: SeriesMarker<Time>[] = [];
@@ -758,6 +781,21 @@ export default function TradingChart({
           (a.runLength > 1 ? ` ×${a.runLength}` : "") +
           (a.extreme ? " !" : ""),
         size: a.extreme ? 2 : 1,
+      });
+    }
+
+    /* Shakeouts: the trend's own followers forced out. Coloured by which side
+       was removed rather than by the bar's direction — a green bar that
+       liquidated longs in an uptrend is the interesting case, and colouring it
+       green would say the opposite of what happened. */
+    for (const sq of strongestSqueezePerRun(shakeouts).slice(-8)) {
+      out.push({
+        time: sq.time as UTCTimestamp,
+        position: sq.side === "longs" ? "belowBar" : "aboveBar",
+        color: sq.side === "longs" ? "#ff4d6d" : "#00e5a0",
+        shape: sq.side === "longs" ? "arrowUp" : "arrowDown",
+        text: `SHAKEOUT ${sq.side === "longs" ? "LONGS" : "SHORTS"} ${sq.multiple.toFixed(1)}×${sq.severe ? " !" : ""}`,
+        size: sq.severe ? 2 : 1,
       });
     }
 
@@ -869,7 +907,7 @@ export default function TradingChart({
       }
     }
     return out.sort((a, b) => Number(a.time) - Number(b.time));
-  }, [analysis, overlays, institutional, aggressive]);
+  }, [analysis, overlays, institutional, aggressive, shakeouts]);
 
   useEffect(() => {
     if (!ready || disposedRef.current || !candleSeriesRef.current) return;
@@ -1596,16 +1634,13 @@ export default function TradingChart({
             backing first and the ring is drawn heavy enough to read against
             a filled candle.
          2. Zoomed out, 140 circles at two pixels of spacing is a smear, not
-            information. Below a usable bar width the overlay draws nothing
-            and says so, rather than pretending the fog is a signal. */
+            information. Below a usable bar width the overlay simply draws
+            nothing. It used to print a line saying why; that line was itself
+            clutter on the chart, and the toggle's own tooltip already carries
+            the explanation without taking up pixels. */
       if (overlays.contractBubbles && candles.length > 5) {
         const MIN_BAR_W = 5;
-        if (barWidth < MIN_BAR_W) {
-          ctx.fillStyle = "rgba(139,147,167,0.8)";
-          ctx.font = "9px ui-monospace, monospace";
-          ctx.textAlign = "left";
-          ctx.fillText("CONTRACTS — zoom in to read the per-candle split", 10, 14);
-        } else {
+        if (barWidth >= MIN_BAR_W) {
           const recent = candles.slice(-140);
           const meanVol =
             recent.reduce((sum, c) => sum + c.volume, 0) / Math.max(1, recent.length);
@@ -1742,6 +1777,100 @@ export default function TradingChart({
         }
       }
 
+      /* ---------------- Price vs CVD divergence ----------------
+         Two lines, not a label. The claim is that two *slopes* disagree, and
+         a marker saying "divergence" asks to be believed — a marginal one and
+         a screaming one look identical labelled and completely different
+         drawn.
+
+         The price line runs through the pivots on the price scale. The CVD
+         line is a real plot of the two CVD readings at those same times,
+         drawn in its own band with its own scale rather than squeezed onto
+         the price axis: cumulative delta is measured in contracts and price
+         in dollars, and overlaying them on one axis would make the visual
+         gap between the lines meaningless. The band is labelled with the
+         values so the scale is not a mystery. */
+      if (overlays.cvdDivergence && divergences.length > 0) {
+        const bandH = 34;
+        const bandTop = h - (ts.height?.() ?? 28) - 10 - bandH;
+        const cvds = divergences.flatMap((d) => [d.from.cvd, d.to.cvd]);
+        const cvdMin = Math.min(...cvds);
+        const cvdMax = Math.max(...cvds);
+        const cvdSpan = Math.max(cvdMax - cvdMin, 1e-9);
+        const cvdY = (v: number) => bandTop + bandH - ((v - cvdMin) / cvdSpan) * bandH;
+
+        // A faint ground for the band, so the second line reads as its own
+        // plot rather than as a stray line among the candles.
+        ctx.fillStyle = "rgba(6,9,16,0.55)";
+        ctx.fillRect(0, bandTop - 2, rightEdge, bandH + 4);
+        ctx.fillStyle = "rgba(139,147,167,0.7)";
+        ctx.font = "8px ui-monospace, monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("CVD", 4, bandTop + 8);
+
+        for (const d of divergences) {
+          const x1 = xOf(d.from.time);
+          const x2 = xOf(d.to.time);
+          if (x1 == null || x2 == null) continue;
+          const bear = d.kind === "bearish";
+          const colour = bear ? "rgba(255,77,109,0.95)" : "rgba(0,229,160,0.95)";
+
+          // The price leg, through the actual pivots.
+          const py1 = yOf(d.from.price);
+          const py2 = yOf(d.to.price);
+          if (py1 != null && py2 != null) {
+            ctx.strokeStyle = colour;
+            ctx.lineWidth = 1.75;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(Number(x1), Number(py1));
+            ctx.lineTo(Number(x2), Number(py2));
+            ctx.stroke();
+            for (const [px, py] of [
+              [x1, py1],
+              [x2, py2],
+            ] as const) {
+              ctx.beginPath();
+              ctx.arc(Number(px), Number(py), 3, 0, Math.PI * 2);
+              ctx.fillStyle = colour;
+              ctx.fill();
+            }
+            ctx.fillStyle = colour;
+            ctx.font = "9px ui-monospace, monospace";
+            ctx.textAlign = "left";
+            ctx.fillText(
+              `${d.label} ${d.strength}`,
+              Math.min(Number(x2) + 6, rightEdge - 92),
+              Number(py2) + (bear ? -6 : 12)
+            );
+          }
+
+          // The CVD leg, in its own band and on its own scale.
+          ctx.strokeStyle = colour;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(Number(x1), cvdY(d.from.cvd));
+          ctx.lineTo(Number(x2), cvdY(d.to.cvd));
+          ctx.stroke();
+          ctx.setLineDash([]);
+          for (const [px, v] of [
+            [x1, d.from.cvd],
+            [x2, d.to.cvd],
+          ] as const) {
+            ctx.beginPath();
+            ctx.arc(Number(px), cvdY(v), 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = colour;
+            ctx.fill();
+          }
+          ctx.fillStyle = "rgba(203,213,225,0.85)";
+          ctx.font = "8px ui-monospace, monospace";
+          ctx.textAlign = "right";
+          ctx.fillText(compact(d.to.cvd), Math.min(Number(x2) - 4, rightEdge - 4), cvdY(d.to.cvd) - 4);
+          ctx.textAlign = "left";
+        }
+      }
+
       /* ---------------- Numeric rows (volume / delta / liq delta) ---------------- */
       const rowsToDraw: {
         label: string;
@@ -1816,19 +1945,10 @@ export default function TradingChart({
         const baseY = h - axisH - 6;
         ctx.font = "9px ui-monospace, monospace";
 
-        if (showEvery === 0) {
-          // One quiet line instead of the bands, so the rows are still
-          // discoverable without darkening the chart to say so.
-          const names = rowsToDraw.map((r) => r.label).join(" · ");
-          const text = `${names} — zoom in to read`;
-          ctx.textAlign = "left";
-          const wText = ctx.measureText(text).width;
-          ctx.fillStyle = "rgba(6,9,16,0.82)";
-          ctx.fillRect(3, baseY - 8, wText + 10, 15);
-          ctx.fillStyle = "rgba(148,163,184,0.9)";
-          ctx.fillText(text, 8, baseY + 3);
-          return;
-        }
+        // Nothing fits: draw nothing at all. The bands are what made this
+        // area unreadable, and a line explaining their absence was still a
+        // line across the chart.
+        if (showEvery === 0) return;
 
         ctx.textAlign = "center";
 
@@ -1902,7 +2022,7 @@ export default function TradingChart({
       if (disposedRef.current) return;
       try { ts.unsubscribeVisibleTimeRangeChange(safeDraw); } catch { /* disposed */ }
     };
-  }, [ready, analysis, overlays, candles, pricePrecision, institutional]);
+  }, [ready, analysis, overlays, candles, pricePrecision, institutional, divergences]);
 
   // Keep the badge anchored when the price scale shifts without a new tick.
   useEffect(() => {

@@ -62,6 +62,10 @@ export interface OverlayToggles {
   aggressiveCandles: boolean;
   /** volume profile of net delta rather than of total volume */
   deltaProfile: boolean;
+  /** bars where the trend's *own* side was liquidated — the shakeout */
+  squeezeCandles: boolean;
+  /** price/CVD divergences drawn as two opposing trendlines */
+  cvdDivergence: boolean;
 }
 
 /** Where the candle inspector has been dragged to, in px from the chart's top-left. */
@@ -165,6 +169,8 @@ export const useMarketStore = create<MarketState>()(
         stackedImbalance: false,
         aggressiveCandles: false,
         deltaProfile: false,
+        squeezeCandles: false,
+        cvdDivergence: false,
         // On by default: these are the labels the structure panel is already
         // talking about, and reading them off the chart is the point.
         swingLabels: true,
