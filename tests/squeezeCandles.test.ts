@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSqueezeCandles } from "@/engines/squeezeCandles";
+import { findSqueezeCandles, strongestSqueezePerRun } from "@/engines/squeezeCandles";
 import { Candle, LiquidationDeltaPoint } from "@/engines/types";
 
 /**
@@ -141,5 +141,34 @@ describe("findSqueezeCandles — honesty", () => {
     // A zero baseline gives no multiple to compute, so the bar is skipped
     // rather than reported as an infinite spike.
     for (const s of r) expect(Number.isFinite(s.multiple)).toBe(true);
+  });
+});
+
+describe("strongestSqueezePerRun", () => {
+  /* A cascade prints across adjacent bars — one event, not four. Marking each
+     of them stacked the labels into an unreadable smear on the chart. */
+  it("keeps the fiercest bar of a run", () => {
+    const r = findSqueezeCandles(
+      downtrend,
+      liq(80, 70, { short: 9999 }).map((p, i) =>
+        i >= 69 && i <= 71 ? { ...p, shortLiquidated: i === 70 ? 9999 : 4000, delta: 0 } : p
+      )
+    );
+    expect(r.length).toBeGreaterThan(1);
+    const collapsed = strongestSqueezePerRun(r);
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].index).toBe(70);
+  });
+
+  it("keeps two flushes that were genuinely separate", () => {
+    const series = liq(80, -1, {}).map((p, i) =>
+      i === 50 || i === 70 ? { ...p, shortLiquidated: 9999 } : p
+    );
+    const collapsed = strongestSqueezePerRun(findSqueezeCandles(downtrend, series));
+    expect(collapsed.length).toBe(2);
+  });
+
+  it("returns nothing for nothing", () => {
+    expect(strongestSqueezePerRun([])).toEqual([]);
   });
 });

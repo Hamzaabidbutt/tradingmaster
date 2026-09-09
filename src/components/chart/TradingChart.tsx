@@ -24,7 +24,7 @@ import { candleAtTime, computeCandleStats, CandleStats } from "@/engines/candleS
 import { buildCandleStory } from "@/engines/candleStory";
 import { findStrongCandles } from "@/engines/strongCandles";
 import { findAggressiveCandles, strongestPerRun } from "@/engines/aggressiveCandles";
-import { findSqueezeCandles } from "@/engines/squeezeCandles";
+import { findSqueezeCandles, strongestSqueezePerRun } from "@/engines/squeezeCandles";
 import { findCvdDivergences } from "@/engines/cvdDivergence";
 import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
@@ -788,7 +788,7 @@ export default function TradingChart({
        was removed rather than by the bar's direction — a green bar that
        liquidated longs in an uptrend is the interesting case, and colouring it
        green would say the opposite of what happened. */
-    for (const sq of shakeouts.slice(-8)) {
+    for (const sq of strongestSqueezePerRun(shakeouts).slice(-8)) {
       out.push({
         time: sq.time as UTCTimestamp,
         position: sq.side === "longs" ? "belowBar" : "aboveBar",

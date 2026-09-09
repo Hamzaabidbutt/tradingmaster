@@ -64,6 +64,37 @@ export interface SqueezeCandle {
   note: string;
 }
 
+/** Bars apart that still counts as the same flush. */
+const RUN_GAP = 2;
+
+/**
+ * Collapse consecutive same-side shakeouts to the fiercest one in each run.
+ *
+ * A cascade prints across several adjacent bars, and that is one event rather
+ * than four. Marking every bar of it both overstates the count and stacks the
+ * labels on top of each other until none is readable — which is exactly what
+ * happened on the chart before this existed.
+ */
+export function strongestSqueezePerRun(bars: SqueezeCandle[]): SqueezeCandle[] {
+  const out: SqueezeCandle[] = [];
+  let best: SqueezeCandle | null = null;
+  let prev: SqueezeCandle | null = null;
+
+  const flush = () => {
+    if (best) out.push(best);
+    best = null;
+  };
+
+  for (const b of bars) {
+    const continues = prev != null && b.side === prev.side && b.index - prev.index <= RUN_GAP + 1;
+    if (!continues) flush();
+    if (!best || b.multiple > best.multiple) best = b;
+    prev = b;
+  }
+  flush();
+  return out;
+}
+
 /**
  * Find the bars where the trend's own side was liquidated.
  *
