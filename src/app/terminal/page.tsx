@@ -12,6 +12,7 @@ import PositioningPanel from "@/components/panels/PositioningPanel";
 import ConflictPanel from "@/components/panels/ConflictPanel";
 import Foldable from "@/components/layout/Foldable";
 import StateCard from "@/components/panels/StateCard";
+import LiquidityMapPanel from "@/components/panels/LiquidityMapPanel";
 import { useSeasonality } from "@/hooks/useSeasonality";
 import SeasonalityPanel from "@/components/panels/SeasonalityPanel";
 import MarketSelector from "@/components/layout/MarketSelector";
@@ -292,7 +293,12 @@ function Terminal() {
             extra rail. */}
         <div className="flex min-w-0 flex-col gap-3">
           <div className="h-[620px]">
-            <AIInsightPanel analysis={analysis} />
+            <AIInsightPanel
+              analysis={analysis}
+              candles={candles}
+              openInterest={openInterest}
+              funding={funding}
+            />
           </div>
         </div>
 
@@ -394,6 +400,19 @@ function Terminal() {
       <div className="hidden p-3 pt-0 xl:block">
         <Foldable id="pressuremap" label="Squeeze & Liquidation Map" height={620}>
           <PressureMapPanel analysis={analysis} pricePrecision={pricePrecision} />
+        </Foldable>
+      </div>
+
+      {/* The same forced flow as a destination map rather than a number, plus
+          the measured book size beside it. */}
+      <div className="p-3 pt-0">
+        <Foldable id="liquiditymap" label="Liquidity Map" height={620}>
+          <LiquidityMapPanel
+            analysis={analysis}
+            walls={walls}
+            price={price}
+            pricePrecision={pricePrecision}
+          />
         </Foldable>
       </div>
 
