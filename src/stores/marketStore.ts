@@ -66,6 +66,8 @@ export interface OverlayToggles {
   squeezeCandles: boolean;
   /** price/CVD divergences drawn as two opposing trendlines */
   cvdDivergence: boolean;
+  /** bar extremes where both sides were still trading — business left undone */
+  unfinishedAuctions: boolean;
 }
 
 /** Where the candle inspector has been dragged to, in px from the chart's top-left. */
@@ -171,6 +173,7 @@ export const useMarketStore = create<MarketState>()(
         deltaProfile: false,
         squeezeCandles: false,
         cvdDivergence: false,
+        unfinishedAuctions: false,
         // On by default: these are the labels the structure panel is already
         // talking about, and reading them off the chart is the point.
         swingLabels: true,

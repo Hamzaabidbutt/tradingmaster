@@ -1,4 +1,12 @@
-import { Candle, FootprintCandle, FootprintCell, FootprintResult } from "./types";
+import {
+  Candle,
+  FootprintCandle,
+  FootprintCell,
+  FootprintResult,
+  UnfinishedAuction,
+} from "./types";
+
+export type { UnfinishedAuction };
 
 /**
  * Footprint engine — the "x-ray" of a candle.
@@ -262,6 +270,106 @@ function buildOne(
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/* ------------------------------------------------------------------ *
+ * Unfinished auctions
+ * ------------------------------------------------------------------ */
+
+/**
+ * A bar extreme where the auction was cut off rather than completed.
+ *
+ * When a move up genuinely ends, the last trades at the high lift the offer
+ * and then nobody wants any more: the top price level shows buying and
+ * essentially no selling, because no seller was given the chance to trade
+ * there before price turned away. That is a *finished* auction — the market
+ * tested the level, found no interest, and left.
+ *
+ * When both sides print meaningfully at the very top row, the opposite
+ * happened: buyers were still being filled and sellers were still meeting them
+ * when the bar simply ran out of time. Nothing was settled there. Those levels
+ * act as magnets, because the business that was being done is still
+ * outstanding, and price tends to come back to finish it.
+ *
+ * This is one of the few footprint reads that points *forward* rather than
+ * describing what already happened — which is also why it needs stating
+ * carefully: a magnet is a tendency, not a schedule. An unfinished high can sit
+ * unvisited for weeks, and plenty are never revisited at all.
+ */
+/** How evenly the extreme must be split before the auction counts as unfinished. */
+const UNFINISHED_BALANCE = 0.4;
+/** ...and how much volume it needs, against the average cell in its bar. */
+const UNFINISHED_VOLUME_X = 0.5;
+
+/**
+ * Find bar extremes where both sides were still trading.
+ *
+ * Pure and synchronous. `filled` is computed against the bars that followed
+ * inside the supplied footprint window, so a level older than the window may
+ * be reported as open when it has in fact been revisited — the window length
+ * is the honest limit of what this can see, and callers should pass one long
+ * enough to cover the levels they intend to act on.
+ */
+export function findUnfinishedAuctions(
+  footprint: FootprintResult,
+  opts: { bars?: number; openOnly?: boolean } = {}
+): UnfinishedAuction[] {
+  const bars = opts.bars ?? 30;
+  const window = footprint.candles.slice(-bars);
+  const out: UnfinishedAuction[] = [];
+
+  for (let i = 0; i < window.length; i++) {
+    const candle = window[i];
+    if (candle.cells.length < 3) continue;
+    const avgCell =
+      candle.cells.reduce((s, c) => s + c.bidVolume + c.askVolume, 0) / candle.cells.length;
+    if (avgCell <= 0) continue;
+
+    // cells are built low → high, so the ends of the array are the extremes.
+    const ends: { cell: FootprintCell; side: "high" | "low" }[] = [
+      { cell: candle.cells[candle.cells.length - 1], side: "high" },
+      { cell: candle.cells[0], side: "low" },
+    ];
+
+    for (const { cell, side } of ends) {
+      const volume = cell.bidVolume + cell.askVolume;
+      if (volume <= 0) continue;
+      const volumeX = volume / avgCell;
+      if (volumeX < UNFINISHED_VOLUME_X) continue;
+      const larger = Math.max(cell.bidVolume, cell.askVolume);
+      const balance = larger > 0 ? Math.min(cell.bidVolume, cell.askVolume) / larger : 0;
+      if (balance < UNFINISHED_BALANCE) continue;
+
+      const price = side === "high" ? candle.high : candle.low;
+      // Traded through by a later bar in the window, not merely touched: a
+      // wick that stops exactly at the level has not finished the business
+      // that was left there.
+      const filled = window
+        .slice(i + 1)
+        .some((later) => (side === "high" ? later.high > price : later.low < price));
+
+      out.push({
+        time: candle.time,
+        price: Number(price.toFixed(8)),
+        side,
+        bidVolume: Number(cell.bidVolume.toFixed(2)),
+        askVolume: Number(cell.askVolume.toFixed(2)),
+        balance: Number(balance.toFixed(2)),
+        volumeX: Number(volumeX.toFixed(2)),
+        filled,
+        note:
+          `Both sides were still trading at the bar's ${side} (${(balance * 100).toFixed(0)}% split), so the auction there was cut off by the bar closing rather than settled. ` +
+          (side === "high"
+            ? "Buyers were still being filled and sellers were still meeting them. "
+            : "Sellers were still hitting the bid and buyers were still taking it. ") +
+          (filled
+            ? "A later bar has since traded through the level, so the outstanding business is done."
+            : "No later bar in this window has traded through it, so it is still open. Open extremes act as magnets — a tendency, not a schedule; some are never revisited."),
+      });
+    }
+  }
+
+  return opts.openOnly ? out.filter((u) => !u.filled) : out;
 }
 
 /* ------------------------------------------------------------------ *

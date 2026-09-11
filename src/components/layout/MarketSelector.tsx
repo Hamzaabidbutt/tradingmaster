@@ -99,6 +99,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
         title:
           "Price and cumulative delta pulling opposite ways, drawn as two lines rather than a label — the claim is about slope, and a marginal divergence and a screaming one look identical labelled. Higher high on falling delta is distribution; lower low on rising delta is accumulation. Not a reversal signal: divergences persist, and many end by ceasing to diverge.",
       },
+      {
+        key: "unfinishedAuctions",
+        label: "UNFIN",
+        title:
+          "Bar highs and lows where BOTH sides were still trading when the bar closed, drawn as levels. A finished test of a high shows buying and no selling at the top price — nobody was given the chance to sell there before price left. When both sides printed, the auction was cut off rather than settled, and the business left undone acts as a magnet. Only levels no later bar has traded through are drawn. A magnet is a tendency, not a schedule: some are never revisited.",
+      },
       { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
     ],
   },
@@ -183,6 +189,7 @@ const LAYER_PRESETS: { id: string; label: string; title: string; keys: (keyof Ov
       "premiumDiscount",
       "supplyDemand",
       "equalLevels",
+      "unfinishedAuctions",
     ],
   },
   {
