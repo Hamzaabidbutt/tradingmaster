@@ -329,6 +329,104 @@ export interface FootprintResult {
   summary: string[];
 }
 
+/** A bar extreme where both sides were still trading when the bar closed. */
+export interface UnfinishedAuction {
+  time: number;
+  price: number;
+  /** which extreme of the bar was left open */
+  side: "high" | "low";
+  bidVolume: number;
+  askVolume: number;
+  /** how evenly the two sides split the level, 0-1; 1 is a dead heat */
+  balance: number;
+  /** the level's volume against the average cell in its own bar */
+  volumeX: number;
+  /** true once a later bar has traded through the level */
+  filled: boolean;
+  note: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Intrabar delta path
+ * ------------------------------------------------------------------ */
+
+export type ExcursionVerdict =
+  | "clean_buying"
+  | "clean_selling"
+  | "absorbed_buying"
+  | "absorbed_selling"
+  | "two_sided";
+
+export interface BarExcursion {
+  time: number;
+  index: number;
+  /** cumulative delta at the bar's close */
+  closeDelta: number;
+  /** the highest the cumulative delta reached inside the bar */
+  maxDelta: number;
+  /** the lowest it reached */
+  minDelta: number;
+  /** peak minus close, when the peak was positive; 0 otherwise */
+  gaveBackUp: number;
+  /** close minus trough, when the trough was negative; 0 otherwise */
+  gaveBackDown: number;
+  /** where the bar closed in its own range, 0 = at the low, 1 = at the high */
+  closePosition: number;
+  /** sub-bars the path was reconstructed from */
+  samples: number;
+  verdict: ExcursionVerdict;
+  note: string;
+}
+
+export interface DeltaExcursionResult {
+  /** false when no lower-timeframe series was supplied; everything else is empty */
+  available: boolean;
+  bars: BarExcursion[];
+  /** the most recent bar carrying an absorption verdict, if any */
+  latestAbsorption: BarExcursion | null;
+  sourceTimeframe: string | null;
+  headline: string;
+  caveats: string[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Tape speed
+ * ------------------------------------------------------------------ */
+
+export type TapeResolution = "bar" | "sub_bar";
+
+export interface TapeBar {
+  time: number;
+  index: number;
+  /** base-asset volume per second across the bar */
+  volumePerSecond: number;
+  /** trades per second across the bar; null when the feed omits trade counts */
+  tradesPerSecond: number | null;
+  /** the fastest slice inside the bar; equals the average at bar resolution */
+  peakVolumePerSecond: number;
+  /** peak against the trailing baseline */
+  multiple: number;
+  burst: boolean;
+  extreme: boolean;
+}
+
+export interface TapeSpeedResult {
+  resolution: TapeResolution;
+  bars: TapeBar[];
+  /** the most recent bar measured */
+  current: TapeBar | null;
+  /** median volume per second over the context window */
+  baselineVolumePerSecond: number;
+  /** median trades per second, or null when trade counts are unavailable */
+  baselineTradesPerSecond: number | null;
+  /** bursts in the window, most recent last */
+  bursts: TapeBar[];
+  headline: string;
+  /** what size and trade count disagreeing implies, when they do */
+  note: string;
+  caveats: string[];
+}
+
 /* ------------------------------------------------------------------ *
  * Absorption / Exhaustion / Trapped traders
  * ------------------------------------------------------------------ */
@@ -1059,6 +1157,12 @@ export interface FullAnalysis {
   doublePatterns: DoublePattern[];
   volumeProfile: VolumeProfileResult;
   footprint: FootprintResult;
+  /** bar extremes left open, where both sides were still trading at the close */
+  unfinishedAuctions: UnfinishedAuction[];
+  /** max/min delta inside each bar; unavailable without a sub-timeframe series */
+  deltaExcursion: DeltaExcursionResult;
+  /** how fast the tape is running against its own recent rate */
+  tapeSpeed: TapeSpeedResult;
   orderFlowEvents: OrderFlowEvents;
   delta: DeltaAnalysis;
   movingAverages: MovingAverageResult;

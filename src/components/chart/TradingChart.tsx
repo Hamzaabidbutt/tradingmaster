@@ -29,6 +29,7 @@ import { findCvdDivergences } from "@/engines/cvdDivergence";
 import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
+import { barIntervalSeconds, thinMarkers } from "./markerLayout";
 import { SESSIONS } from "@/engines/weekProfile";
 
 interface Props {
@@ -60,6 +61,33 @@ interface Props {
 
 const BULL = "#00e5a0";
 const BEAR = "#ff4d6d";
+
+/** A chart marker carrying the rank it takes into the label de-collision pass. */
+type RankedMarker = SeriesMarker<Time> & { priority: number };
+
+/**
+ * Which label survives when two want the same stretch of chart.
+ *
+ * Ordered by how much the mark changes what a reader would do. A trap or a
+ * change of character is a decision; a third consecutive aggressive-bar label
+ * is texture, and texture is what should give way. These only matter when space
+ * is contested — nothing is dropped while there is room for it.
+ */
+const RANK = {
+  trapped: 90,
+  choch: 85,
+  absorptionKeyLevel: 80,
+  bos: 70,
+  shakeoutSevere: 66,
+  sweep: 60,
+  absorption: 58,
+  exhaustion: 55,
+  shakeout: 50,
+  aggressiveExtreme: 42,
+  aggressive: 30,
+  pattern: 20,
+  checklist: 14,
+} as const;
 /** Cumulative delta: blue while it rises, white while it falls. */
 /* One colour per line. Both were briefly two-tone — blue rising, white falling
    — which turned each into two overlaid series and made direction readable at
@@ -180,6 +208,15 @@ export default function TradingChart({
   const [badgeY, setBadgeY] = useState<number | null>(null);
   /** Timestamp of the candle under the cursor, if any. */
   const [hoveredTime, setHoveredTime] = useState<number | null>(null);
+  /**
+   * Horizontal pixels per bar, quantised, for the marker de-collision pass.
+   *
+   * Quantised because the raw spacing changes on every pixel of a drag, and
+   * re-deciding which labels fit at that rate would make them flicker in and
+   * out under the cursor. Rounding to a step means the set only changes at a
+   * zoom level where the answer genuinely differs.
+   */
+  const [barPx, setBarPx] = useState(0);
   /**
    * True while the pointer is over one of the inspector's interactive parts.
    *
@@ -306,17 +343,21 @@ export default function TradingChart({
     }
   }, [ready, numericRows]);
 
-  // --- Track whether the user is following the right edge ---
+  // --- Track whether the user is following the right edge, and the zoom ---
   useEffect(() => {
     const chart = chartRef.current;
     if (!ready || !chart) return;
     const ts = chart.timeScale();
     const onRangeChange = () => {
+      // Bar spacing feeds the marker de-collision pass; see `barPx`. Read on
+      // every range change because zooming is the only thing that moves it.
+      setBarPx(quantiseBarPx(estimateBarWidth(ts, candles)));
       const range = ts.getVisibleLogicalRange();
       if (!range) return;
       // Within ~2 bars of the newest bar counts as "following".
       followRef.current = range.to >= candles.length - 2;
     };
+    onRangeChange();
     ts.subscribeVisibleLogicalRangeChange(onRangeChange);
     return () => {
       if (disposedRef.current) return;
@@ -758,8 +799,8 @@ export default function TradingChart({
   );
 
   // --- Markers: structure, sweeps, patterns, order-flow events ---
-  const markers = useMemo<SeriesMarker<Time>[]>(() => {
-    const out: SeriesMarker<Time>[] = [];
+  const markers = useMemo<RankedMarker[]>(() => {
+    const out: RankedMarker[] = [];
 
     /* Aggressive bars, named by who crossed the spread. Deliberately not
        coloured by the candle's own direction: a red bar with 80% taker buying
@@ -781,6 +822,7 @@ export default function TradingChart({
           (a.runLength > 1 ? ` ×${a.runLength}` : "") +
           (a.extreme ? " !" : ""),
         size: a.extreme ? 2 : 1,
+        priority: a.extreme ? RANK.aggressiveExtreme : RANK.aggressive,
       });
     }
 
@@ -796,6 +838,7 @@ export default function TradingChart({
         shape: sq.side === "longs" ? "arrowUp" : "arrowDown",
         text: `SHAKEOUT ${sq.side === "longs" ? "LONGS" : "SHORTS"} ${sq.multiple.toFixed(1)}×${sq.severe ? " !" : ""}`,
         size: sq.severe ? 2 : 1,
+        priority: sq.severe ? RANK.shakeoutSevere : RANK.shakeout,
       });
     }
 
@@ -820,6 +863,7 @@ export default function TradingChart({
           shape: "arrowUp",
           text: m.label,
           size: 0,
+          priority: RANK.checklist,
         });
       }
     }
@@ -834,6 +878,7 @@ export default function TradingChart({
           shape: ev.direction === "bullish" ? "arrowUp" : "arrowDown",
           text: `${ev.scope === "internal" ? "i" : ""}${ev.type}`,
           size: ev.type === "CHOCH" ? 2 : 1,
+          priority: ev.type === "CHOCH" ? RANK.choch : RANK.bos,
         });
       }
     }
@@ -846,6 +891,7 @@ export default function TradingChart({
           shape: "circle",
           text: "SWEEP",
           size: 1,
+          priority: RANK.sweep,
         });
       }
     }
@@ -858,6 +904,7 @@ export default function TradingChart({
           shape: "square",
           text: p.name.split(" ").map((w) => w[0]).join(""),
           size: 0,
+          priority: RANK.pattern,
         });
       }
     }
@@ -879,6 +926,7 @@ export default function TradingChart({
           shape: "circle",
           text: `${supplyAbsorbed ? "SUPPLY" : "DEMAND"} ABSORBED${a.atKeyLevel ? " ★" : ""}`,
           size: a.atKeyLevel ? 2 : 1,
+          priority: a.atKeyLevel ? RANK.absorptionKeyLevel : RANK.absorption,
         });
       }
       /* Exhaustion, named by which side ran out. `side` is the side losing
@@ -893,6 +941,7 @@ export default function TradingChart({
           shape: "square",
           text: `${buyersDone ? "BUYERS" : "SELLERS"} EXHAUSTED`,
           size: 1,
+          priority: RANK.exhaustion,
         });
       }
       for (const t of analysis.orderFlowEvents.trapped.slice(-4)) {
@@ -903,16 +952,37 @@ export default function TradingChart({
           shape: t.side === "buyers" ? "arrowDown" : "arrowUp",
           text: `${t.side === "buyers" ? "BUYERS" : "SELLERS"} TRAPPED`,
           size: 2,
+          priority: RANK.trapped,
         });
       }
     }
     return out.sort((a, b) => Number(a.time) - Number(b.time));
   }, [analysis, overlays, institutional, aggressive, shakeouts]);
 
+  /**
+   * The markers that actually fit, with their ranks stripped.
+   *
+   * lightweight-charts centres each label on its bar and lets them overlap, so
+   * a cluster of order-flow events — which is the normal case, absorption and
+   * traps arrive in runs — renders as an unreadable smear. The per-engine run
+   * collapsers cannot see across kinds; this runs last, over the whole list.
+   */
+  const visibleMarkers = useMemo<SeriesMarker<Time>[]>(() => {
+    const barSeconds = barIntervalSeconds(candles.map((c) => c.time));
+    const fitted = thinMarkers(
+      markers.map((m) => ({ ...m, time: Number(m.time) })),
+      { pxPerBar: barPx, barSeconds }
+    );
+    return fitted.map(({ priority: _priority, ...marker }) => ({
+      ...marker,
+      time: marker.time as UTCTimestamp,
+    }));
+  }, [markers, barPx, candles]);
+
   useEffect(() => {
     if (!ready || disposedRef.current || !candleSeriesRef.current) return;
-    try { candleSeriesRef.current.setMarkers(markers); } catch { /* disposed */ }
-  }, [ready, markers]);
+    try { candleSeriesRef.current.setMarkers(visibleMarkers); } catch { /* disposed */ }
+  }, [ready, visibleMarkers]);
 
   // --- Price lines: S/R, liquidity, trade levels, POC/VA, delta spikes ---
   useEffect(() => {
@@ -975,6 +1045,21 @@ export default function TradingChart({
           l.kind === "support" ? "rgba(0,229,160,0.5)" : "rgba(255,77,109,0.5)",
           `${l.kind === "support" ? "S" : "R"} ${l.strength}`,
           LineStyle.Dashed
+        );
+      }
+    }
+    /* Extremes where both sides were still trading when the bar closed.
+       Only the ones no later bar has traded through — a level whose business
+       has been finished is history, and drawing it would put a line through
+       the chart for something already resolved. */
+    if (overlays.unfinishedAuctions) {
+      const open = analysis.unfinishedAuctions.filter((u) => !u.filled).slice(-6);
+      for (const u of open) {
+        add(
+          u.price,
+          u.side === "high" ? "rgba(251,191,36,0.55)" : "rgba(167,139,250,0.55)",
+          `UNFIN ${u.side === "high" ? "H" : "L"}`,
+          LineStyle.Dotted
         );
       }
     }
@@ -2113,6 +2198,16 @@ function estimateBarWidth(ts: ReturnType<IChartApi["timeScale"]>, candles: Candl
   const b = ts.timeToCoordinate(candles[mid].time as UTCTimestamp);
   if (a == null || b == null) return 0;
   return Math.abs(Number(b) - Number(a));
+}
+
+/**
+ * Bar spacing rounded to a step, so a drag does not re-decide the marker set
+ * on every pixel. 3px is fine enough that the answer never lags the zoom by a
+ * visible amount, and coarse enough that panning at one zoom level is stable.
+ */
+function quantiseBarPx(px: number): number {
+  if (!Number.isFinite(px) || px <= 0) return 0;
+  return Math.max(1, Math.round(px / 3) * 3);
 }
 
 /** Compact number formatting so values fit inside one bar width. */

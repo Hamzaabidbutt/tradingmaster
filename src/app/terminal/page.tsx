@@ -24,6 +24,8 @@ import StructurePanel from "@/components/panels/StructurePanel";
 import LevelsPanel from "@/components/panels/LevelsPanel";
 import VolumeProfilePanel from "@/components/panels/VolumeProfilePanel";
 import FootprintPanel from "@/components/panels/FootprintPanel";
+import ClusterSearchPanel from "@/components/panels/ClusterSearchPanel";
+import TapePanel from "@/components/panels/TapePanel";
 import PressureMapPanel from "@/components/panels/PressureMapPanel";
 import OrderFlowEventsPanel from "@/components/panels/OrderFlowEventsPanel";
 import MultiWindowPanel from "@/components/panels/MultiWindowPanel";
@@ -351,6 +353,20 @@ function Terminal() {
         </Foldable>
         <Foldable id="orderflow" label="Order Flow" height={560}>
           <OrderFlowPanel analysis={analysis} />
+        </Foldable>
+      </div>
+
+      {/* Directly under the footprint, because both read the same grid. The
+          grid shows every cluster and leaves the eye to find the ones that
+          matter; the search states the property first and returns them. The
+          tape panel sits alongside since speed and the intrabar delta path are
+          the two things a candle cannot show at all. */}
+      <div className="grid grid-cols-1 gap-3 p-3 pt-0 [&>*]:min-w-0 xl:grid-cols-2">
+        <Foldable id="clustersearch" label="Cluster Search" height={560}>
+          <ClusterSearchPanel analysis={analysis} pricePrecision={pricePrecision} />
+        </Foldable>
+        <Foldable id="tape" label="Tape Speed & Delta Path" height={560}>
+          <TapePanel analysis={analysis} />
         </Foldable>
       </div>
 

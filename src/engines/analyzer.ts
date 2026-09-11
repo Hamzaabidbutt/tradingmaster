@@ -4,7 +4,9 @@ import { detectCandlePatterns } from "./candlestick";
 import { analyzeChart } from "./chartAnalyst";
 import { analyzeDelta } from "./deltaAnalysis";
 import { detectDoublePatterns } from "./doublePatterns";
-import { buildFootprint } from "./footprint";
+import { buildFootprint, findUnfinishedAuctions } from "./footprint";
+import { analyzeDeltaExcursion } from "./deltaExcursion";
+import { analyzeTapeSpeed } from "./tapeSpeed";
 import { detectFVGs } from "./fvg";
 import { computeFibonacci, computeMovingAverages, computeVwap, detectEqualLevels } from "./indicators";
 import { generateInsights } from "./insights";
@@ -103,6 +105,17 @@ export function analyzeMarket(
     count: 30,
     sourceTimeframe: opts.subTimeframe,
   });
+  /* Extremes where both sides were still trading when the bar closed. Read off
+     the same footprint the grid shows, so the panel and the chart can never
+     disagree about which levels are open. */
+  const unfinishedAuctions = findUnfinishedAuctions(footprint, { bars: 30 });
+  /* The path the delta took inside each bar, which is where absorption lives.
+     Reports itself unavailable without sub-candles rather than modelling a
+     path — see the engine's own note on why that distinction matters. */
+  const deltaExcursion = analyzeDeltaExcursion(candles, opts.subCandles ?? null, {
+    sourceTimeframe: opts.subTimeframe,
+  });
+  const tapeSpeed = analyzeTapeSpeed(candles, opts.subCandles ?? null);
   const delta = analyzeDelta(candles);
   const orderFlowEvents = detectOrderFlowEvents(candles, footprint, volumeProfile, srLevels);
 
@@ -163,6 +176,9 @@ export function analyzeMarket(
     doublePatterns,
     volumeProfile,
     footprint,
+    unfinishedAuctions,
+    deltaExcursion,
+    tapeSpeed,
     orderFlowEvents,
     delta,
     movingAverages,
