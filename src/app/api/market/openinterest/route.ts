@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchOpenInterestHist, OpenInterestPeriod } from "@/lib/binance";
+import { fetchOpenInterestHist, oiPeriodFor } from "@/lib/binance";
 import { isValidTimeframe, Timeframe } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
  * Open-interest history for the chart's own overlay.
  *
  * Binance serves open interest on its own fixed set of periods, which is not
- * the chart's timeframe list — there is no 1m, 3m or 1w series. `OI_PERIOD`
+ * the chart's timeframe list — there is no 1m, 3m or 1w series. `oiPeriodFor`
  * maps each chart interval onto the nearest one that exists, so the overlay
  * lines up with the candles instead of silently returning nothing on the
  * intervals Binance does not publish.
@@ -18,23 +18,6 @@ export const dynamic = "force-dynamic";
  * not a bug, and the panel says so rather than drawing a line that stops for
  * no visible reason.
  */
-const OI_PERIOD: Record<Timeframe, OpenInterestPeriod> = {
-  "1m": "5m",
-  "3m": "5m",
-  "5m": "5m",
-  "15m": "15m",
-  "30m": "30m",
-  "1h": "1h",
-  "2h": "2h",
-  "4h": "4h",
-  "6h": "6h",
-  "8h": "12h",
-  "12h": "12h",
-  "1d": "1d",
-  "1w": "1d",
-  "1M": "1d",
-};
-
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   const symbol = (q.get("symbol") ?? "").toUpperCase();
@@ -47,11 +30,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const points = await fetchOpenInterestHist(symbol, OI_PERIOD[timeframe], limit);
+    const points = await fetchOpenInterestHist(symbol, oiPeriodFor(timeframe), limit);
     return NextResponse.json({
       symbol,
       timeframe,
-      period: OI_PERIOD[timeframe],
+      period: oiPeriodFor(timeframe),
       points,
     });
   } catch (err) {
