@@ -94,6 +94,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
           "Bars where the trend's OWN side was liquidated: shorts forced out in a downtrend, longs in an uptrend. A downtrend liquidating longs is just the trend working and is never marked — the marked bars are the ones where the people positioned correctly were removed, which both clears the fuel under the move and is where trend-followers are worst placed.",
       },
       {
+        key: "cvdCandles",
+        label: "CVD CANDLES",
+        title:
+          "Cumulative delta as candles instead of a line. The body is the bar's net delta; the wicks are how far the delta travelled inside the bar. A long wick on a small body is aggression pressing and being handed back — which a line draws as a gentle rise, the opposite of what happened. Wicks need the intrabar reconstruction: bars without one are drawn wickless, meaning the path is unknown rather than straight.",
+      },
+      {
         key: "cvdDivergence",
         label: "CVD DIV",
         title:
@@ -104,6 +110,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
         label: "UNFIN",
         title:
           "Bar highs and lows where BOTH sides were still trading when the bar closed, drawn as levels. A finished test of a high shows buying and no selling at the top price — nobody was given the chance to sell there before price left. When both sides printed, the auction was cut off rather than settled, and the business left undone acts as a magnet. Only levels no later bar has traded through are drawn. A magnet is a tendency, not a schedule: some are never revisited.",
+      },
+      {
+        key: "clusterNumbers",
+        label: "CLUSTERS",
+        title:
+          "The footprint printed on the candles themselves: traded volume at each price on the left, net delta on the right, both heat-shaded so the eye finds the heavy level before it reads the figure. Needs room — twelve rows of two numbers requires a wide bar AND a tall one, so below either threshold it draws nothing rather than smearing digits across the price action it is meant to annotate. Zoom in to use it.",
       },
       { key: "candleInspector", label: "OHLC", title: "Hover card with the stats of the candle under the cursor" },
     ],
@@ -211,7 +223,9 @@ const LAYER_PRESETS: { id: string; label: string; title: string; keys: (keyof Ov
       "aggressiveCandles",
       "stackedImbalance",
       "cvd",
+      "cvdCandles",
       "cvdDivergence",
+      "clusterNumbers",
       "squeezeCandles",
       "bigTrades",
     ],
