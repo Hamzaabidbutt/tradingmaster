@@ -10,6 +10,7 @@ import {
   IPriceLine,
   ISeriesApi,
   LineStyle,
+  LogicalRange,
   SeriesMarker,
   Time,
   UTCTimestamp,
@@ -876,44 +877,98 @@ export default function TradingChart({
    * move price with it, the same way scrolling price moves it. The guard flag
    * is what stops that being a feedback loop — each handler would otherwise
    * set the other, which sets the first, and the pair judder under any pan.
+   *
+   * ## Why price → pane is a frame loop and not a subscription
+   *
+   * It was a subscription, symmetric with the other direction, and it left the
+   * pane's candles bunched at the far left while price showed the last hundred
+   * bars — the pane holding its own short range while price held a wide one.
+   * Every mechanism I could name for that (`setData` refitting, a resize, a
+   * series swap) was answered by calling the handler again after the event,
+   * and the pane still drifted, because the fix assumed the event fired at all.
+   *
+   * A subscription can only correct a divergence it is told about. Whatever
+   * changes the scale without notifying — inside the library, on a code path
+   * this component never sees — leaves the two out of step with nothing left
+   * to trigger a repair. So this stops chasing the trigger and enforces the
+   * invariant instead: every frame, read price's range and apply it to the
+   * pane if they differ. Two number reads per frame is nothing next to the
+   * drawing the library is already doing, and the pane cannot stay wrong for
+   * longer than one frame no matter what put it wrong.
+   *
+   * The reverse direction stays a subscription. It has never misfired — it is
+   * driven by the user's own pan on the pane — and a second loop pushing the
+   * other way would just be the two fighting.
    */
   useEffect(() => {
     const main = chartRef.current;
     const sub = cvdChartRef.current;
     if (!ready || !main || !sub) return;
 
-    const link = (from: IChartApi, to: IChartApi) => () => {
+    /** Below this the two ranges are the same view; setting again only jitters. */
+    const EPSILON = 0.01;
+
+    const pull = () => {
       if (syncingRef.current) return;
-      const range = from.timeScale().getVisibleLogicalRange();
-      if (!range) return;
+      let want: LogicalRange | null;
+      try {
+        want = main.timeScale().getVisibleLogicalRange();
+      } catch {
+        return; /* disposed */
+      }
+      if (!want) return;
       syncingRef.current = true;
       try {
-        to.timeScale().setVisibleLogicalRange(range);
+        const have = sub.timeScale().getVisibleLogicalRange();
+        if (
+          have &&
+          Math.abs(have.from - want.from) < EPSILON &&
+          Math.abs(have.to - want.to) < EPSILON
+        ) {
+          return;
+        }
+        sub.timeScale().setVisibleLogicalRange(want);
       } catch {
         /* disposed */
       } finally {
         syncingRef.current = false;
       }
     };
-    const mainToSub = link(main, sub);
-    const subToMain = link(sub, main);
-    syncFromMainRef.current = mainToSub;
 
-    // Adopt the main chart's current view immediately, or the pane opens
-    // showing the whole history while price shows the last forty bars.
-    mainToSub();
-    main.timeScale().subscribeVisibleLogicalRangeChange(mainToSub);
-    sub.timeScale().subscribeVisibleLogicalRangeChange(subToMain);
+    const push = () => {
+      if (syncingRef.current) return;
+      const range = sub.timeScale().getVisibleLogicalRange();
+      if (!range) return;
+      syncingRef.current = true;
+      try {
+        main.timeScale().setVisibleLogicalRange(range);
+      } catch {
+        /* disposed */
+      } finally {
+        syncingRef.current = false;
+      }
+    };
+
+    syncFromMainRef.current = pull;
+
+    let frame = 0;
+    const tick = () => {
+      pull();
+      frame = requestAnimationFrame(tick);
+    };
+    tick();
+    sub.timeScale().subscribeVisibleLogicalRangeChange(push);
+
     return () => {
       syncFromMainRef.current = null;
-      try { main.timeScale().unsubscribeVisibleLogicalRangeChange(mainToSub); } catch { /* disposed */ }
-      try { sub.timeScale().unsubscribeVisibleLogicalRangeChange(subToMain); } catch { /* disposed */ }
+      cancelAnimationFrame(frame);
+      try { sub.timeScale().unsubscribeVisibleLogicalRangeChange(push); } catch { /* disposed */ }
     };
     /* Deliberately not keyed on the CVD data. That changes identity on every
-       analysis poll, and re-subscribing both handlers every few seconds to
-       re-establish a link that has not changed is churn for nothing. The two
-       chart instances are the only thing this effect depends on, and the
-       creation effect above sets its ref before this one reads it. */
+       analysis poll, and restarting the loop every few seconds to re-establish
+       a link that has not changed is churn for nothing. The two chart
+       instances are the only thing this effect depends on, and the creation
+       effect above sets its ref before this one reads it. */
   }, [ready, overlays.cvdCandles]);
 
   /**
