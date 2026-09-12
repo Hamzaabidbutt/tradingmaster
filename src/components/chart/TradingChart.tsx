@@ -199,6 +199,14 @@ export default function TradingChart({
    * the chart judders under any pan.
    */
   const syncingRef = useRef(false);
+  /**
+   * Pull the main chart's visible range onto the pane.
+   *
+   * Held in a ref because three separate paths need it and only one of them
+   * owns the subscription: the range handler, the resize observer, and — the
+   * one whose absence caused the bug — every `setData`.
+   */
+  const syncFromMainRef = useRef<(() => void) | null>(null);
   const oiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
@@ -715,11 +723,7 @@ export default function TradingChart({
   }, [ready, analysis, overlays.cvd]);
 
   /**
-   * Cumulative delta as candles.
-   *
-   * Shares the CVD line's price scale on purpose: with both switched on they
-   * describe the same quantity, and putting them on separate scales would draw
-   * two differently-shaped versions of one series.
+   * Cumulative delta as candles, for the pane below the chart.
    *
    * The wicks come from the intrabar reconstruction the analysis already
    * carries. Bars outside that window are drawn wickless, which is the honest
@@ -798,6 +802,10 @@ export default function TradingChart({
       if (gone) return;
       try {
         chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+        /* Growing a chart's width keeps its bar spacing rather than refitting,
+           so the bars stay where they were and the new space is left empty.
+           Re-pulling the main chart's range is what fills it. */
+        syncFromMainRef.current?.();
       } catch {
         /* disposed between the callback firing and this line */
       }
@@ -842,6 +850,20 @@ export default function TradingChart({
           close: c.close,
         }))
       );
+      /* This is the line whose absence broke the pane. `setData` refits the
+         time scale to the data it was just given, so a series that briefly
+         held a different number of bars than price — during a load, a symbol
+         change, or a timeframe switch — ends up on its own scale. Nothing then
+         corrects it, because the only other sync runs when the MAIN chart's
+         range changes and the main chart has not moved. The visible symptom is
+         a handful of candles crammed into the left edge of an otherwise empty
+         pane, at price's bar spacing, for as long as nobody pans. */
+      syncFromMainRef.current?.();
+      /* Once more on the next frame. The library refits the time scale as part
+         of its own render pass rather than inside `setData`, so a sync applied
+         in the same tick can be overwritten by the refit that follows it. */
+      const again = requestAnimationFrame(() => syncFromMainRef.current?.());
+      return () => cancelAnimationFrame(again);
     } catch {
       /* disposed between the guard and the call */
     }
@@ -875,6 +897,7 @@ export default function TradingChart({
     };
     const mainToSub = link(main, sub);
     const subToMain = link(sub, main);
+    syncFromMainRef.current = mainToSub;
 
     // Adopt the main chart's current view immediately, or the pane opens
     // showing the whole history while price shows the last forty bars.
@@ -882,6 +905,7 @@ export default function TradingChart({
     main.timeScale().subscribeVisibleLogicalRangeChange(mainToSub);
     sub.timeScale().subscribeVisibleLogicalRangeChange(subToMain);
     return () => {
+      syncFromMainRef.current = null;
       try { main.timeScale().unsubscribeVisibleLogicalRangeChange(mainToSub); } catch { /* disposed */ }
       try { sub.timeScale().unsubscribeVisibleLogicalRangeChange(subToMain); } catch { /* disposed */ }
     };
