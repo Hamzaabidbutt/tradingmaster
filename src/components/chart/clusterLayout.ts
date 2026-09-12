@@ -13,14 +13,34 @@
  * twelve four-digit numbers is not readable as numbers — the eye finds the hot
  * cell first and reads the figure second.
  *
- * ## The zoom rule
+ * ## The zoom rule, and why it is a ladder rather than a threshold
  *
- * This only draws when there is genuinely room for it. Twelve rows of two
- * numbers needs both a wide bar and a tall one, and below either threshold the
- * honest thing is to draw nothing at all: a smear of overlapping digits across
- * the candles is worse than the candles alone, and it hides the price action
- * it was supposed to annotate. That is the same rule the numeric rows at the
- * bottom of the chart already follow.
+ * Figures only draw when there is genuinely room for them. A smear of
+ * overlapping digits across the candles is worse than the candles alone,
+ * because it hides the price action it was meant to annotate.
+ *
+ * That rule used to be a single threshold — two columns of figures, or
+ * nothing — and the arithmetic made it unreachable. Two four-digit columns
+ * need about fifty pixels of bar, which is eighteen bars across a nine-hundred
+ * pixel chart. Nobody trades at eighteen bars on screen, so in practice the
+ * toggle printed "zoom in" forever and never drew anything at any zoom a
+ * person actually uses. A feature that cannot be reached is not a careful
+ * feature, it is a broken one.
+ *
+ * So the refusal is now the last rung of a ladder rather than the first:
+ *
+ * - `double` — volume and delta side by side. What the terminals show, and
+ *   what the widest bars still get.
+ * - `single` — one column across the bar: the volume figure, in a cell
+ *   coloured by that level's delta. Half the pixels, most of the information.
+ * - `heat`  — no figures at all. Each level is one cell, its hue from the
+ *   sign of the delta and its opacity from the volume, which is a cluster
+ *   heatmap and is legible down to a few pixels of bar width.
+ * - `none`  — genuinely nothing to show: fewer than three levels would fit,
+ *   or the bar is thinner than a hairline.
+ *
+ * Every rung is honest about what it is: the heat rung claims nothing
+ * numeric, so there are no unreadable digits to mislead anyone.
  */
 
 /** Smallest legible font for the cell figures. */
@@ -57,12 +77,38 @@ const CELL_PAD_PX = 3;
  * overlap nobody traces back to here.
  */
 export const COLUMN_GAP_PX = 2;
+/**
+ * Height of one price row when the cells carry no text.
+ *
+ * A heat cell has nothing to read, so the only thing it owes the eye is being
+ * distinguishable from its neighbours. Two pixels is that floor.
+ */
+const HEAT_ROW_PX = 2;
+/** Below this a bar is a hairline and its cells would be invisible anyway. */
+const MIN_HEAT_WIDTH_PX = 3;
+
+/**
+ * How much of the footprint a bar has room to show.
+ *
+ * Ordered by how much it claims: `double` prints two figures per level,
+ * `single` one, `heat` none, `none` draws nothing at all.
+ */
+export type ClusterMode = "double" | "single" | "heat" | "none";
 
 export interface ClusterFit {
+  /** what to draw — see {@link ClusterMode} */
+  mode: ClusterMode;
   /** false when there is not enough room; nothing should be drawn */
   show: boolean;
+  /** 0 in `heat` mode, where there is no text */
   fontPx: number;
-  /** width of each of the two columns, in px */
+  /**
+   * Width of one column, in px.
+   *
+   * In `double` mode that is half the bar, less the gap between the pair. In
+   * `single` and `heat` modes there is one column and this is the whole bar,
+   * so a painter can lay out every mode from the same two numbers.
+   */
   columnWidth: number;
   /** height of one price row, in px */
   rowHeight: number;
@@ -88,7 +134,22 @@ export interface ClusterFit {
 const MIN_ROWS = 3;
 
 /**
- * Decide whether the cluster numbers fit, and at what size.
+ * Largest legible font for a figure of `digits` characters in a cell of the
+ * given size, or 0 when no legible size fits.
+ *
+ * Capped by the row height as well as the column width, so tall rows on a
+ * narrow bar do not print text that overflows sideways.
+ */
+function fontFor(usableWidthPx: number, rowHeightPx: number, digits: number): number {
+  if (!(usableWidthPx > 0) || !(digits > 0)) return 0;
+  const byWidth = usableWidthPx / (digits * CHAR_W_RATIO);
+  const byHeight = rowHeightPx * ROW_TEXT_RATIO;
+  const px = Math.floor(Math.min(byWidth, byHeight, MAX_FONT_PX));
+  return px >= MIN_FONT_PX ? px : 0;
+}
+
+/**
+ * Decide how much of a bar's footprint fits, and at what size.
  *
  * Pure. `barRangePx` is the pixel height of the bar's own high-to-low span,
  * which is what the rows have to divide up — not the height of the pane.
@@ -97,6 +158,10 @@ const MIN_ROWS = 3;
  * they will actually hold: sizing to a fixed guess either wastes half the bar
  * on a symbol trading in hundreds or clips the figures on one trading in
  * millions.
+ *
+ * Tries the rungs of the ladder in order and returns the first that fits, so
+ * the display gets coarser as the bars narrow instead of disappearing. See the
+ * module comment for why that ladder exists.
  */
 export function clusterFit(
   barWidthPx: number,
@@ -105,6 +170,7 @@ export function clusterFit(
   longestDigits: number
 ): ClusterFit {
   const none = (reason: string): ClusterFit => ({
+    mode: "none",
     show: false,
     fontPx: 0,
     columnWidth: 0,
@@ -121,37 +187,50 @@ export function clusterFit(
   /* Fit the rows to the bar rather than the bar to the rows. Twelve levels
      inside twenty pixels is not a display, so the levels are merged down to
      however many the bar can actually hold. */
-  const rowsToDraw = Math.min(rows, Math.floor(barRangePx / MIN_ROW_PX));
-  if (rowsToDraw < MIN_ROWS) {
-    return none("Zoom in — the bar is too short to hold even a few readable price levels.");
+  const textRows = Math.min(rows, Math.floor(barRangePx / MIN_ROW_PX));
+  if (textRows >= MIN_ROWS) {
+    const rowHeight = barRangePx / textRows;
+    const shared = { rowHeight, rowsToDraw: textRows, merged: textRows < rows, reason: "" };
+
+    // Two columns plus the gap have to fit inside the bar's own width.
+    const pairWidth = (barWidthPx - COLUMN_GAP_PX) / 2;
+    const pairFont = fontFor(pairWidth - CELL_PAD_PX * 2, rowHeight, longestDigits);
+    if (pairFont > 0) {
+      return { mode: "double", show: true, fontPx: pairFont, columnWidth: pairWidth, ...shared };
+    }
+
+    /* One column across the whole bar. Half the pixels of the pair and most of
+       the information: the figure is the volume at that level and the cell it
+       sits in is coloured by the level's delta, so the reader still gets both
+       numbers, one of them as colour. */
+    const soloFont = fontFor(barWidthPx - CELL_PAD_PX * 2, rowHeight, longestDigits);
+    if (soloFont > 0) {
+      return { mode: "single", show: true, fontPx: soloFont, columnWidth: barWidthPx, ...shared };
+    }
   }
-  const rowHeight = barRangePx / rowsToDraw;
 
-  // Two columns plus the gap have to fit inside the bar's own width.
-  const columnWidth = (barWidthPx - COLUMN_GAP_PX) / 2;
-  const usable = columnWidth - CELL_PAD_PX * 2;
-  if (usable <= 0) return none("Zoom in — the bar is too narrow for two columns.");
-
-  /* Size the text to the widest figure the column will hold, then cap it by
-     the row height so tall rows on a narrow bar do not print text that
-     overflows sideways. */
-  const byWidth = usable / (longestDigits * CHAR_W_RATIO);
-  const byHeight = rowHeight * ROW_TEXT_RATIO;
-  const fontPx = Math.floor(Math.min(byWidth, byHeight, MAX_FONT_PX));
-
-  if (fontPx < MIN_FONT_PX) {
-    return none("Zoom in — the figures would be too small to read.");
+  /* No figures fit. A heat cell has nothing to read, so it survives down to a
+     couple of pixels a row and a few pixels of width — which is the zoom
+     people actually trade at, and where this overlay used to give up. */
+  const heatRows = Math.min(rows, Math.floor(barRangePx / HEAT_ROW_PX));
+  if (barWidthPx >= MIN_HEAT_WIDTH_PX && heatRows >= MIN_ROWS) {
+    return {
+      mode: "heat",
+      show: true,
+      fontPx: 0,
+      columnWidth: barWidthPx,
+      rowHeight: barRangePx / heatRows,
+      rowsToDraw: heatRows,
+      merged: heatRows < rows,
+      reason: "",
+    };
   }
 
-  return {
-    show: true,
-    fontPx,
-    columnWidth,
-    rowHeight,
-    rowsToDraw,
-    merged: rowsToDraw < rows,
-    reason: "",
-  };
+  return none(
+    barWidthPx < MIN_HEAT_WIDTH_PX
+      ? "Zoom in — the bars are thinner than a cluster cell."
+      : "Zoom in — the bar is too short to hold even a few price levels."
+  );
 }
 
 /**

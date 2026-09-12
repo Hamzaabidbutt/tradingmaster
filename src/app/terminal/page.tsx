@@ -245,13 +245,15 @@ function Terminal() {
             need, which is a number decided by text wrapping in a side panel —
             and it left the candles squeezed into a strip. The chart is the
             thing people read; it sets the row height, and the side column
-            stretches to match it. Taller again when the CVD pane is open,
-            since that pane takes its space out of the candles. */}
-        <div
-          className={`glass flex min-w-0 flex-col p-3 ${
-            overlays.cvdCandles ? "h-[860px] xl:h-[1000px]" : "h-[700px] xl:h-[840px]"
-          }`}
-        >
+            stretches to match it.
+
+            One height, not two. It used to grow when the CVD pane opened, so
+            toggling that overlay shoved every panel on the page down by a
+            hundred and sixty pixels and back again — the layout jumped under
+            the reader for a change they made to one pane. A card that is
+            always this tall costs the candles the pane's share only while the
+            pane is actually open, and costs the page nothing. */}
+        <div className="glass flex h-[860px] min-w-0 flex-col p-3 xl:h-[1000px]">
           {/* Above the coin name: what the tape has done recently, with times. */}
           <EventTape analysis={analysis} />
           <MarketSelector connected={connected} price={price} countdown={formatted} />

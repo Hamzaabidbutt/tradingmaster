@@ -2067,30 +2067,37 @@ export default function TradingChart({
             if (!refusal) refusal = fit.reason;
             continue;
           }
-          let drewBar = false;
-
           /* Merged down to the rows this bar can hold, so a short candle shows a
              coarser ladder instead of nothing at all. */
           const rows = mergeRows(volumes, deltas, fit.rowsToDraw);
           const barMaxVolume = Math.max(...rows.map((r) => r.volume), 0);
           const barMaxAbsDelta = Math.max(...rows.map((r) => Math.abs(r.delta)), 0);
           const left = xn - barWidth / 2;
+          /* In `double` mode the block is two columns and a gap; in the other
+             modes one column the width of the bar. Measuring the block rather
+             than assuming the pair is what lets the same guard serve all
+             three. */
+          const blockWidth =
+            fit.mode === "double" ? fit.columnWidth * 2 + COLUMN_GAP_PX : fit.columnWidth;
           const mid = left + fit.columnWidth;
           /* Past the right edge the columns run under the price axis, where
              the figures collide with its labels and neither is readable. */
-          if (left < 0 || mid + COLUMN_GAP_PX + fit.columnWidth > rightEdge) {
+          if (left < 0 || left + blockWidth > rightEdge) {
             continue;
           }
-          drewBar = true;
-          ctx.font = `${fit.fontPx}px ui-monospace, monospace`;
+          if (fit.fontPx > 0) ctx.font = `${fit.fontPx}px ui-monospace, monospace`;
 
-          /* An opaque backing behind the whole block, before any heat goes on.
-             The heat fills are deliberately light — they have to read as a
-             gradient across twelve rows — and over a bright candle body that
-             leaves the figures sitting on red. The candles are noise for this
-             overlay's job, the same way they are behind the contract bubbles. */
-          ctx.fillStyle = "rgba(9,12,20,0.88)";
-          ctx.fillRect(left, Number(yHigh), barWidth, rangePx);
+          /* A backing behind the whole block, before any heat goes on. The heat
+             fills are deliberately light — they have to read as a gradient
+             across twelve rows — and over a bright candle body that leaves the
+             figures sitting on red.
+
+             Only the rungs that print figures pay full price for it. The heat
+             rung has no text to protect, and blanking the candle to show a
+             tint over where it used to be takes away more than it gives, so
+             there it is a wash the candle still reads through. */
+          ctx.fillStyle = fit.mode === "heat" ? "rgba(9,12,20,0.45)" : "rgba(9,12,20,0.88)";
+          ctx.fillRect(left, Number(yHigh), blockWidth, rangePx);
 
           for (let r = 0; r < rows.length; r++) {
             const cell = rows[r];
@@ -2103,29 +2110,59 @@ export default function TradingChart({
 
             const vHeat = volumeHeat(volume, barMaxVolume);
             const dHeat = deltaHeat(cell.delta, barMaxAbsDelta);
-
-            // Volume cell: a neutral wash that brightens toward the bar's own
-            // point of control.
-            ctx.fillStyle = `rgba(148,163,184,${(0.08 + vHeat * 0.34).toFixed(3)})`;
-            ctx.fillRect(left, rowTop, fit.columnWidth, fit.rowHeight - 1);
-            // Delta cell: coloured by sign, intensity by magnitude.
-            ctx.fillStyle =
+            const deltaWash = (alpha: number) =>
               dHeat >= 0
-                ? `rgba(56,189,248,${(0.08 + dHeat * 0.5).toFixed(3)})`
-                : `rgba(244,63,94,${(0.08 + -dHeat * 0.5).toFixed(3)})`;
-            ctx.fillRect(mid + COLUMN_GAP_PX, rowTop, fit.columnWidth, fit.rowHeight - 1);
+                ? `rgba(56,189,248,${alpha.toFixed(3)})`
+                : `rgba(244,63,94,${alpha.toFixed(3)})`;
+            /* Heat rows can be two pixels tall, where taking a pixel back for a
+               separating line removes half the cell. Only rows with room to
+               spare pay for the gap. */
+            const cellHeight = fit.rowHeight > 3 ? fit.rowHeight - 1 : fit.rowHeight;
 
-            ctx.textAlign = "right";
-            ctx.fillStyle = `rgba(226,232,240,${(0.6 + vHeat * 0.4).toFixed(3)})`;
-            ctx.fillText(fmt(volume), mid - 3, centreY);
-            ctx.fillStyle = `rgba(241,245,249,${(0.6 + Math.abs(dHeat) * 0.4).toFixed(3)})`;
-            ctx.fillText(
-              cell.delta >= 0 ? fmt(cell.delta) : `-${fmt(Math.abs(cell.delta))}`,
-              mid + COLUMN_GAP_PX + fit.columnWidth - 3,
-              centreY
-            );
+            if (fit.mode === "double") {
+              // Volume cell: a neutral wash that brightens toward the bar's own
+              // point of control.
+              ctx.fillStyle = `rgba(148,163,184,${(0.08 + vHeat * 0.34).toFixed(3)})`;
+              ctx.fillRect(left, rowTop, fit.columnWidth, cellHeight);
+              // Delta cell: coloured by sign, intensity by magnitude.
+              ctx.fillStyle = deltaWash(0.08 + Math.abs(dHeat) * 0.5);
+              ctx.fillRect(mid + COLUMN_GAP_PX, rowTop, fit.columnWidth, cellHeight);
+
+              /* Empty levels stay blank in both columns — see the single-column
+                 branch below for why. */
+              if (volume > 0) {
+                ctx.textAlign = "right";
+                ctx.fillStyle = `rgba(226,232,240,${(0.6 + vHeat * 0.4).toFixed(3)})`;
+                ctx.fillText(fmt(volume), mid - 3, centreY);
+                ctx.fillStyle = `rgba(241,245,249,${(0.6 + Math.abs(dHeat) * 0.4).toFixed(3)})`;
+                ctx.fillText(
+                  cell.delta >= 0 ? fmt(cell.delta) : `-${fmt(Math.abs(cell.delta))}`,
+                  mid + COLUMN_GAP_PX + fit.columnWidth - 3,
+                  centreY
+                );
+              }
+            } else {
+              /* One cell per level. The hue carries the delta's sign and the
+                 opacity its size, which is the same grammar as the pair's
+                 right-hand column — so zooming out coarsens the display
+                 without changing what a colour means. */
+              ctx.fillStyle = deltaWash(0.1 + Math.abs(dHeat) * 0.55);
+              ctx.fillRect(left, rowTop, fit.columnWidth, cellHeight);
+
+              /* Nothing traded there, so there is nothing to print. A column of
+                 "0.0" down every empty level is ink that says only that the
+                 level was empty, which its blank cell already says. */
+              if (fit.mode === "single" && volume > 0) {
+                /* The figure is the volume, because the delta is already the
+                   colour of the cell it sits in and printing it twice would
+                   spend the bar's only column saying one thing. */
+                ctx.textAlign = "right";
+                ctx.fillStyle = `rgba(226,232,240,${(0.65 + vHeat * 0.35).toFixed(3)})`;
+                ctx.fillText(fmt(volume), left + fit.columnWidth - 3, centreY);
+              }
+            }
           }
-          if (drewBar) drew++;
+          drew++;
         }
         if (drew === 0 && refusal) {
           ctx.textAlign = "left";
