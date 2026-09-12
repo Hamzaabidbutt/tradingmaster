@@ -98,8 +98,13 @@ function usePolled<T>(url: string | null, intervalMs: number) {
     try {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as T);
-      setError(null);
+      const payload = (await res.json()) as T & { error?: unknown };
+      setData(payload);
+      /* These routes report failure as HTTP 200 with an `error` field and a
+         complete-but-empty body, so the page can render its own empty state
+         rather than a spinner. Checking only `res.ok` therefore reported every
+         one of those as a success and left the reason on the floor. */
+      setError(typeof payload?.error === "string" && payload.error ? payload.error : null);
     } catch (err) {
       setError(String(err));
     } finally {

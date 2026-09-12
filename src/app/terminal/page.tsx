@@ -240,7 +240,18 @@ function Terminal() {
 
       <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         {/* Chart cell */}
-        <div className="glass flex h-[620px] min-w-0 flex-col p-3 xl:h-auto">
+        {/* A tall, explicit height rather than `h-auto`. Left to the grid the
+            chart took whatever height the panel column beside it happened to
+            need, which is a number decided by text wrapping in a side panel —
+            and it left the candles squeezed into a strip. The chart is the
+            thing people read; it sets the row height, and the side column
+            stretches to match it. Taller again when the CVD pane is open,
+            since that pane takes its space out of the candles. */}
+        <div
+          className={`glass flex min-w-0 flex-col p-3 ${
+            overlays.cvdCandles ? "h-[860px] xl:h-[1000px]" : "h-[700px] xl:h-[840px]"
+          }`}
+        >
           {/* Above the coin name: what the tape has done recently, with times. */}
           <EventTape analysis={analysis} />
           <MarketSelector connected={connected} price={price} countdown={formatted} />

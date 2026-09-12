@@ -33,7 +33,11 @@ export default function MarketOverviewCard({
         ) : null
       }
     >
-      {!data ? (
+      {/* An empty universe is the failure shape as much as a null payload is:
+          the route answers an upstream outage with a complete but zeroed
+          response so nothing downstream has to guard every field, and breadth
+          across zero pairs is not a reading worth printing. */}
+      {!data || data.universe === 0 ? (
         <EmptyNote>
           {loading ? "Reading the universe…" : `Market breadth unavailable${error ? ` — ${error}` : ""}.`}
         </EmptyNote>

@@ -152,6 +152,40 @@ export async function GET() {
     cacheSet("overview:market", payload, TTL_MS);
     return NextResponse.json(payload);
   } catch (err) {
-    return NextResponse.json({ error: String(err), warning: "market data unavailable" }, { status: 200 });
+    /* A complete, empty OverviewResponse — not a bare `{ error }`.
+       This route declares it returns an OverviewResponse and, on failure, used
+       to return an object that was not one. The card reads `data` as soon as
+       it is non-null, so `data.advanceDeclineRatio.toFixed(2)` threw and took
+       the whole dashboard down with it: a geo-blocked region or any upstream
+       hiccup produced a blank page rather than the "breadth unavailable" note
+       the card already knows how to show.
+
+       The sibling scan route already returns a full empty shape plus a reason,
+       for exactly this purpose. Matching it means the type stops lying, the
+       compiler will flag any field added to the interface and forgotten here,
+       and no consumer can meet an OverviewResponse with holes in it. */
+    return NextResponse.json(
+      {
+        universe: 0,
+        advancing: 0,
+        declining: 0,
+        unchanged: 0,
+        advanceDeclineRatio: 0,
+        medianChangePct: 0,
+        meanChangePct: 0,
+        totalQuoteVolume: 0,
+        breadthPct: 0,
+        majors: [],
+        topGainers: [],
+        topLosers: [],
+        direction: "mixed",
+        directionLabel: "Market data unavailable",
+        rationale: [],
+        generatedAt: Math.floor(Date.now() / 1000),
+        error: String(err),
+        warning: "market data unavailable",
+      } satisfies OverviewResponse & { error: string; warning: string },
+      { status: 200 }
+    );
   }
 }

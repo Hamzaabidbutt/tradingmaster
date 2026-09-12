@@ -97,7 +97,7 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
         key: "cvdCandles",
         label: "CVD CANDLES",
         title:
-          "Cumulative delta as candles instead of a line. The body is the bar's net delta; the wicks are how far the delta travelled inside the bar. A long wick on a small body is aggression pressing and being handed back — which a line draws as a gentle rise, the opposite of what happened. Wicks need the intrabar reconstruction: bars without one are drawn wickless, meaning the path is unknown rather than straight.",
+          "Cumulative delta as candles, in a pane below the chart with its own price scale — so the highs and lows are legible, and the axis can be dragged to rescale. Scroll and zoom stay in step with price in both directions. The body is the bar's net delta; the wicks are how far the delta travelled inside the bar, and a long wick on a small body is aggression pressing and being handed back, which a line draws as a gentle rise. Wicks need the intrabar reconstruction: bars without one are drawn wickless, meaning the path is unknown rather than straight.",
       },
       {
         key: "cvdDivergence",
