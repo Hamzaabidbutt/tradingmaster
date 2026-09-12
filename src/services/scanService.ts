@@ -4,6 +4,7 @@ import {
   fetchFundingRateHist,
   fetchKlines,
   fetchOpenInterestHist,
+  oiPeriodFor,
 } from "@/lib/binance";
 import { fetchFuturesSymbols } from "@/lib/symbols";
 import { logger } from "@/lib/logger";
@@ -21,6 +22,7 @@ import { detectBullishEngulfing } from "@/engines/engulfing";
 import { detectInstitutional } from "@/engines/institutional";
 import { detectRecovery } from "@/engines/recovery";
 import { BosMomentumSetup, BosState, detectBosMomentum } from "@/engines/bosMomentum";
+import { FlowAlignmentRead, FlowState, readFlowAlignment } from "@/engines/flowAlignment";
 import { analyzeMarket } from "@/engines/analyzer";
 import { evaluateStrategies } from "@/engines/strategies";
 import { getStrategyWeights } from "./signalService";
@@ -1418,6 +1420,136 @@ export async function scanBosMomentum(opts: {
       .sort((a, b) => Math.abs(a.setup.distanceAtr) - Math.abs(b.setup.distanceAtr))
       .slice(0, 20),
     scanned: entries.length,
+    failed_count: failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Flow alignment sweep
+ * ------------------------------------------------------------------ */
+
+export interface FlowAlignmentEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  /** open time of the last closed bar this read was built from, unix seconds */
+  barTime: number;
+  read: FlowAlignmentRead;
+}
+
+/**
+ * Grouped by state, not ranked into one list.
+ *
+ * The whole point of this sweep is that a markup and a covering rally are the
+ * same green candles, so putting them in one ranked list — where a high-scoring
+ * covering rally outranks a modest markup — would undo the separation the
+ * engine just made. Each state gets its own bucket and its own heading.
+ */
+export interface FlowAlignmentScan {
+  timeframe: string;
+  lookback: number;
+  /** price up, CVD up, open interest up — the three-way agreement */
+  longsBuilding: FlowAlignmentEntry[];
+  /** the mirror: price down, CVD down, open interest up */
+  shortsBuilding: FlowAlignmentEntry[];
+  /** real buying, but open interest falling — a finite bid */
+  covering: FlowAlignmentEntry[];
+  /** selling with open interest falling — longs leaving, not shorts arriving */
+  deleveraging: FlowAlignmentEntry[];
+  /** price rose while cumulative delta fell */
+  absorbedRallies: FlowAlignmentEntry[];
+  /** price fell while cumulative delta rose */
+  absorbedSelloffs: FlowAlignmentEntry[];
+  scanned: number;
+  /**
+   * Symbols where at least one axis could not be read — no open-interest
+   * history, a stale series, or a flat window.
+   *
+   * Reported rather than silently dropped: on a quiet hour most of the
+   * universe lands here, and a page showing six empty buckets with no
+   * explanation looks broken rather than calm.
+   */
+  noRead: number;
+  failed_count: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for symbols where price, cumulative delta and open interest agree.
+ *
+ * Two requests per symbol rather than one, because open interest is a separate
+ * series and there is no version of this read without it. That is what sets
+ * the default depth lower than the single-call sweeps: the cost per symbol is
+ * doubled and the answer is a shortlist, not a ranking of the whole market.
+ *
+ * Klines are fetched at the shared `SCAN_BARS` length even though the read
+ * needs only the lookback window. The extra bars are free in practice — every
+ * other sweep uses the same cache key, so a symbol already pulled by the
+ * composite or BOS scan is served from cache instead of costing a second call.
+ */
+export async function scanFlowAlignment(opts: {
+  timeframe: Timeframe;
+  lookback?: number;
+  depth?: number;
+  concurrency?: number;
+}): Promise<FlowAlignmentScan> {
+  const lookback = Math.max(8, Math.min(200, opts.lookback ?? 24));
+  const ranked = takeDepth(await rankUniverse(), opts.depth ?? 75);
+  const period = oiPeriodFor(opts.timeframe);
+  // Enough prints to cover the window with room for the exchange publishing
+  // on a coarser period than the chart's own interval.
+  const oiLimit = Math.min(500, lookback * 2 + 20);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? 10, async (r) => {
+    const [candles, oi] = await Promise.all([
+      fetchKlines(r.symbol, opts.timeframe, SCAN_BARS),
+      // Soft failure: a contract with no open-interest history still produces
+      // a row, it just lands in noRead with the engine's own explanation.
+      fetchOpenInterestHist(r.symbol, period, oiLimit).catch(() => []),
+    ]);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      barTime: candles[candles.length - 1]?.time ?? 0,
+      read: readFlowAlignment(candles, oi, lookback),
+    } satisfies FlowAlignmentEntry;
+  });
+
+  const entries: FlowAlignmentEntry[] = [];
+  let failed = 0;
+  for (const res of results) {
+    // undefined = the deadline hit before this symbol was reached. Not a
+    // failure — counting it as one would report a healthy sweep as broken.
+    if (!res) continue;
+    if (res.status === "fulfilled") entries.push(res.value);
+    else failed++;
+  }
+
+  const byScore = (a: FlowAlignmentEntry, b: FlowAlignmentEntry) => b.read.score - a.read.score;
+  const inState = (state: FlowState, cap: number) =>
+    entries.filter((e) => e.read.state === state).sort(byScore).slice(0, cap);
+
+  return {
+    timeframe: opts.timeframe,
+    lookback,
+    longsBuilding: inState("longs_building", 30),
+    shortsBuilding: inState("shorts_building", 30),
+    /* The contrast buckets are capped harder than the two the sweep is for.
+       They exist so the reader can see what was rejected and why, not to
+       compete for attention with the agreement lists. */
+    covering: inState("covering_rally", 15),
+    deleveraging: inState("deleveraging", 15),
+    absorbedRallies: inState("absorbed_rally", 15),
+    absorbedSelloffs: inState("absorbed_selloff", 15),
+    scanned: entries.length,
+    noRead: entries.filter((e) => e.read.state === null).length,
     failed_count: failed,
     scannedAt: Math.floor(Date.now() / 1000),
   };

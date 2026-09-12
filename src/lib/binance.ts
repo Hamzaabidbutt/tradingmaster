@@ -320,6 +320,38 @@ export async function fetchPremiumIndex(symbol: string): Promise<PremiumIndexSna
  */
 export type OpenInterestPeriod = "5m" | "15m" | "30m" | "1h" | "2h" | "4h" | "6h" | "12h" | "1d";
 
+/**
+ * Each chart timeframe mapped onto the nearest period Binance actually
+ * publishes open interest on.
+ *
+ * Lives here rather than beside any one caller because more than one thing
+ * needs it now — the chart overlay and the flow-alignment sweep — and two
+ * copies of a mapping like this drift the moment one of them is corrected.
+ * Keyed by the chart's own interval strings; anything unrecognised falls back
+ * to the hourly series, which exists for every contract that has any history
+ * at all.
+ */
+const OI_PERIOD: Record<string, OpenInterestPeriod> = {
+  "1m": "5m",
+  "3m": "5m",
+  "5m": "5m",
+  "15m": "15m",
+  "30m": "30m",
+  "1h": "1h",
+  "2h": "2h",
+  "4h": "4h",
+  "6h": "6h",
+  "8h": "12h",
+  "12h": "12h",
+  "1d": "1d",
+  "1w": "1d",
+  "1M": "1d",
+};
+
+export function oiPeriodFor(timeframe: string): OpenInterestPeriod {
+  return OI_PERIOD[timeframe] ?? "1h";
+}
+
 export async function fetchOpenInterestHist(
   symbol: string,
   period: OpenInterestPeriod = "5m",
