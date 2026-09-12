@@ -2,10 +2,19 @@ import { describe, expect, it } from "vitest";
 import { clusterFit, deltaHeat, mergeRows, volumeHeat, widestLabel } from "@/components/chart/clusterLayout";
 
 /**
- * The rule this enforces is that nothing is drawn unless it can be read. A
- * smear of overlapping digits across the candles is worse than the candles
- * alone, because it hides the price action it was meant to annotate — so the
- * tests that matter most are the refusals.
+ * Two rules pull against each other here.
+ *
+ * No unreadable figures: a smear of overlapping digits across the candles is
+ * worse than the candles alone, because it hides the price action it was meant
+ * to annotate. And no unreachable feature: the first version of this enforced
+ * the first rule with a single threshold — two columns of figures or nothing —
+ * which needed fifty pixels of bar and so printed "zoom in" at every zoom
+ * anybody trades at.
+ *
+ * The ladder is how both hold. Figures appear only where they can be read;
+ * below that the cells stay and only the text goes. So the tests that matter
+ * are which rung a given bar lands on, and that the refusal rung is reached
+ * only when there is genuinely nothing left to draw.
  */
 
 describe("clusterFit — when it refuses", () => {
@@ -20,35 +29,101 @@ describe("clusterFit — when it refuses", () => {
     expect(clusterFit(120, NaN, 12, 4).show).toBe(false);
   });
 
-  it("refuses a bar too short to hold even a few rows", () => {
-    // 20px of height cannot hold three readable rows at any row count.
-    const fit = clusterFit(200, 20, 12, 4);
+  it("refuses a bar too short to hold even a few cells", () => {
+    // 5px of height cannot hold three cells even at the heat rung.
+    const fit = clusterFit(200, 5, 12, 4);
     expect(fit.show).toBe(false);
+    expect(fit.mode).toBe("none");
     expect(fit.reason).toMatch(/zoom in/i);
   });
 
-  it("refuses a bar too narrow for two columns", () => {
-    const fit = clusterFit(4, 400, 12, 4);
+  it("refuses a bar thinner than a single cell", () => {
+    const fit = clusterFit(2, 400, 12, 4);
     expect(fit.show).toBe(false);
+    expect(fit.mode).toBe("none");
     expect(fit.reason).toMatch(/zoom in/i);
-  });
-
-  it("refuses when the figures would be smaller than legible", () => {
-    // Wide enough rows, but five-digit figures in a 20px bar means ~2px text.
-    const fit = clusterFit(20, 400, 12, 5);
-    expect(fit.show).toBe(false);
-    expect(fit.reason).toMatch(/too small to read/i);
   });
 
   it("gives a reason whenever it refuses", () => {
     for (const fit of [
-      clusterFit(200, 20, 12, 4),
-      clusterFit(4, 400, 12, 4),
-      clusterFit(20, 400, 12, 5),
+      clusterFit(200, 5, 12, 4),
+      clusterFit(2, 400, 12, 4),
       clusterFit(120, 400, 0, 4),
     ]) {
       expect(fit.show).toBe(false);
       expect(fit.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("never returns a reason for a rung that drew something", () => {
+    for (const [w, h] of [[140, 480], [30, 480], [6, 300], [4, 120]] as const) {
+      const fit = clusterFit(w, h, 12, 4);
+      if (fit.show) expect(fit.reason).toBe("");
+    }
+  });
+});
+
+describe("clusterFit — the ladder", () => {
+  it("gives the widest bars both columns", () => {
+    expect(clusterFit(140, 480, 12, 4).mode).toBe("double");
+  });
+
+  it("drops to one column before it drops the figures", () => {
+    /* The gap between the two rungs is the whole point: a bar that cannot hold
+       two four-digit columns can very often hold one. */
+    const fit = clusterFit(30, 480, 12, 4);
+    expect(fit.mode).toBe("single");
+    expect(fit.fontPx).toBeGreaterThanOrEqual(7);
+    expect(fit.columnWidth).toBe(30);
+  });
+
+  it("drops to heat rather than to nothing at a real trading zoom", () => {
+    /* ~6px per bar is roughly 140 bars on a 900px chart, which is what people
+       actually look at. The old single-threshold rule drew nothing here, so
+       the toggle appeared broken at every usable zoom. */
+    const fit = clusterFit(6, 300, 12, 4);
+    expect(fit.show).toBe(true);
+    expect(fit.mode).toBe("heat");
+    expect(fit.fontPx).toBe(0);
+    expect(fit.rowsToDraw).toBeGreaterThanOrEqual(3);
+  });
+
+  it("claims no text it cannot draw", () => {
+    // fontPx is what the painter sets on the context; heat must report none.
+    for (let w = 3; w <= 200; w += 1) {
+      const fit = clusterFit(w, 400, 12, 4);
+      if (fit.mode === "heat") expect(fit.fontPx).toBe(0);
+      if (fit.mode !== "heat" && fit.show) expect(fit.fontPx).toBeGreaterThanOrEqual(7);
+    }
+  });
+
+  it("is monotone in width — a wider bar never shows less", () => {
+    /* Zooming in must never take information away. Rank the rungs and check
+       the sequence only ever climbs. */
+    const rank = { none: 0, heat: 1, single: 2, double: 3 };
+    let previous = 0;
+    for (let w = 2; w <= 300; w += 2) {
+      const r = rank[clusterFit(w, 480, 12, 4).mode];
+      expect(r).toBeGreaterThanOrEqual(previous);
+      previous = r;
+    }
+  });
+
+  it("keeps the heat rung reachable for tall thin bars", () => {
+    const fit = clusterFit(4, 120, 12, 4);
+    expect(fit.mode).toBe("heat");
+    expect(fit.rowHeight * fit.rowsToDraw).toBeCloseTo(120, 5);
+  });
+
+  it("gives every drawn rung a block that exactly covers the bar's range", () => {
+    for (let h = 6; h <= 600; h += 13) {
+      for (const w of [4, 8, 20, 40, 90, 200]) {
+        const fit = clusterFit(w, h, 12, 4);
+        if (!fit.show) continue;
+        expect(fit.rowHeight * fit.rowsToDraw).toBeCloseTo(h, 5);
+        expect(fit.rowsToDraw).toBeGreaterThanOrEqual(3);
+        expect(fit.rowsToDraw).toBeLessThanOrEqual(12);
+      }
     }
   });
 });
@@ -120,12 +195,12 @@ describe("clusterFit — when it fits", () => {
     /* The two constants are the same constraint from either end, and setting
        them apart let them contradict: a 9px row passed the height check and
        produced a 6px font that failed the legibility check, so the overlay
-       drew nothing at any zoom. Every accepted fit must clear both. */
+       drew nothing at any zoom. Every rung that prints text must clear both. */
     for (let range = 20; range <= 1200; range += 7) {
       for (const width of [60, 90, 140, 260, 500]) {
         const fit = clusterFit(width, range, 12, 4);
         if (!fit.show) continue;
-        expect(fit.fontPx).toBeGreaterThanOrEqual(7);
+        if (fit.mode !== "heat") expect(fit.fontPx).toBeGreaterThanOrEqual(7);
         expect(fit.rowsToDraw).toBeGreaterThanOrEqual(3);
         expect(fit.rowHeight * fit.rowsToDraw).toBeCloseTo(range, 5);
       }
