@@ -64,6 +64,17 @@ interface Props {
 const BULL = "#00e5a0";
 const BEAR = "#ff4d6d";
 
+/** Height of the cumulative-delta pane, in px. */
+const CVD_PANE_HEIGHT = 150;
+/**
+ * Minimum price-axis width, applied to both charts.
+ *
+ * Without it the two axes size themselves to their own labels — CVD runs to
+ * six digits where price runs to five — and every bar in the pane sits a few
+ * pixels left of the price bar it belongs to.
+ */
+const CVD_AXIS_WIDTH = 64;
+
 /** A chart marker carrying the rank it takes into the label de-collision pass. */
 type RankedMarker = SeriesMarker<Time> & { priority: number };
 
@@ -176,8 +187,18 @@ export default function TradingChart({
    * single colour, so rising and falling stretches need one each.
    */
   const cvdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  /** Cumulative delta as candles — shares the CVD price scale so the two align. */
+  /** The CVD pane's own chart, series and container. */
+  const cvdPaneRef = useRef<HTMLDivElement>(null);
+  const cvdChartRef = useRef<IChartApi | null>(null);
   const cvdCandleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  /**
+   * Set while one chart is applying the other's range.
+   *
+   * Two charts each listening to the other and each setting the other is a
+   * feedback loop: without this the pair ping-pong a range between them and
+   * the chart judders under any pan.
+   */
+  const syncingRef = useRef(false);
   const oiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
@@ -321,7 +342,6 @@ export default function TradingChart({
       maSeriesRef.current.clear();
       vwapSeriesRef.current = null;
       cvdSeriesRef.current = null;
-      cvdCandleSeriesRef.current = null;
       oiSeriesRef.current = null;
       liqCumSeriesRef.current = null;
       priceLinesRef.current = [];
@@ -714,36 +734,106 @@ export default function TradingChart({
     [overlays.cvdCandles, candles, analysis]
   );
 
+  /* Build the CVD pane's chart, and tear it down when the overlay goes off.
+     Separate from the data effect below so switching symbol or timeframe
+     re-feeds the series instead of destroying and recreating the chart, which
+     would throw away the user's own zoom on it every poll. */
+  useEffect(() => {
+    const el = cvdPaneRef.current;
+    if (!overlays.cvdCandles || !el) return;
+
+    const chart = createChart(el, {
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "#64748b",
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: "rgba(148,163,184,0.05)" },
+        horzLines: { color: "rgba(148,163,184,0.05)" },
+      },
+      rightPriceScale: {
+        borderColor: "rgba(148,163,184,0.12)",
+        /* Matched to the main chart so the two axes line up. Without it the
+           CVD figures — which run to six digits while price runs to five —
+           make this axis wider, and every bar sits a few pixels left of the
+           price bar it belongs to. */
+        minimumWidth: CVD_AXIS_WIDTH,
+      },
+      // One date axis for the pair, on the chart above. Two would say the
+      // same thing twice and cost this pane a fifth of its height.
+      timeScale: { visible: false, borderVisible: false },
+      crosshair: { mode: CrosshairMode.Normal },
+      handleScroll: true,
+      handleScale: true,
+      /* Sized manually, for the same reason the main chart is: the library's
+         built-in autoSize observer can fire after remove() and throw "Object
+         is disposed". */
+      width: el.clientWidth,
+      height: el.clientHeight,
+    });
+    /* Red and green, the same pair as price. They no longer share a pane with
+       the candles, so the reason to hold them outside the bull/bear palette
+       is gone — and inside their own pane the familiar colours say the
+       familiar thing: this bar closed above where it opened. */
+    cvdCandleSeriesRef.current = chart.addCandlestickSeries({
+      upColor: BULL,
+      downColor: BEAR,
+      borderUpColor: BULL,
+      borderDownColor: BEAR,
+      wickUpColor: BULL,
+      wickDownColor: BEAR,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      /* Whole contracts. Cumulative delta runs to six figures, and two decimal
+         places on it are noise that also widen the axis — which then no longer
+         matches the price axis above and knocks the two panes out of
+         alignment. */
+      priceFormat: { type: "price", precision: 0, minMove: 1 },
+    });
+    cvdChartRef.current = chart;
+
+    let gone = false;
+    const resize = new ResizeObserver(() => {
+      if (gone) return;
+      try {
+        chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+      } catch {
+        /* disposed between the callback firing and this line */
+      }
+    });
+    resize.observe(el);
+
+    return () => {
+      gone = true;
+      resize.disconnect();
+      cvdChartRef.current = null;
+      cvdCandleSeriesRef.current = null;
+      try { chart.remove(); } catch { /* already gone */ }
+    };
+  }, [overlays.cvdCandles]);
+
+  /* Match the main chart's price axis to the pane's while the pane is open.
+     The alignment matters whenever the two are stacked, which is what the
+     pane toggle says — not whether the CVD *line* happens to be on. */
   useEffect(() => {
     const chart = chartRef.current;
     if (!ready || !chart || disposedRef.current) return;
-    if (!cvdCandles || cvdCandles.candles.length === 0) {
-      if (cvdCandleSeriesRef.current) {
-        try { chart.removeSeries(cvdCandleSeriesRef.current); } catch { /* disposed */ }
-        cvdCandleSeriesRef.current = null;
-      }
-      return;
-    }
-    if (!cvdCandleSeriesRef.current) {
-      /* Blue up, violet down — deliberately outside the bull/bear palette.
-         These sit on their own scale but share the pane, and price routinely
-         trades through the band they occupy. Pink-for-down put a CVD candle
-         two shades from a bear price candle right where the two overlap, and
-         at a glance the eye read one as the other. */
-      cvdCandleSeriesRef.current = chart.addCandlestickSeries({
-        upColor: "rgba(56,189,248,0.5)",
-        downColor: "rgba(167,139,250,0.5)",
-        borderUpColor: CVD_COLOUR,
-        borderDownColor: "#a78bfa",
-        wickUpColor: CVD_COLOUR,
-        wickDownColor: "#a78bfa",
-        priceScaleId: "cvd",
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-    }
     try {
-      cvdCandleSeriesRef.current.setData(
+      chart.priceScale("right").applyOptions({
+        minimumWidth: overlays.cvdCandles ? CVD_AXIS_WIDTH : 0,
+      });
+    } catch {
+      /* disposed */
+    }
+  }, [ready, overlays.cvdCandles]);
+
+  // Feed the pane.
+  useEffect(() => {
+    const series = cvdCandleSeriesRef.current;
+    if (!series || !cvdCandles || cvdCandles.candles.length === 0) return;
+    try {
+      series.setData(
         cvdCandles.candles.map((c) => ({
           time: c.time as UTCTimestamp,
           open: c.open,
@@ -755,36 +845,71 @@ export default function TradingChart({
     } catch {
       /* disposed between the guard and the call */
     }
-  }, [ready, cvdCandles]);
+  }, [cvdCandles]);
 
   /**
-   * The cumulative-delta price scale, owned in one place.
+   * Keep the two time scales in step, in both directions.
    *
-   * Both CVD overlays sit on this scale, and both used to set its margins when
-   * they created their series — so whichever effect happened to run last
-   * decided the height. That is fine while they agree and wrong the moment
-   * they do not, which is exactly the case here: a line reads perfectly well
-   * in a fifth of the pane, and candles in that same strip collapse into a row
-   * of dashes with no readable body or wick, which defeats the only reason to
-   * draw them as candles.
+   * Both, because the pane is a chart in its own right: scrolling it should
+   * move price with it, the same way scrolling price moves it. The guard flag
+   * is what stops that being a feedback loop — each handler would otherwise
+   * set the other, which sets the first, and the pair judder under any pan.
+   */
+  useEffect(() => {
+    const main = chartRef.current;
+    const sub = cvdChartRef.current;
+    if (!ready || !main || !sub) return;
+
+    const link = (from: IChartApi, to: IChartApi) => () => {
+      if (syncingRef.current) return;
+      const range = from.timeScale().getVisibleLogicalRange();
+      if (!range) return;
+      syncingRef.current = true;
+      try {
+        to.timeScale().setVisibleLogicalRange(range);
+      } catch {
+        /* disposed */
+      } finally {
+        syncingRef.current = false;
+      }
+    };
+    const mainToSub = link(main, sub);
+    const subToMain = link(sub, main);
+
+    // Adopt the main chart's current view immediately, or the pane opens
+    // showing the whole history while price shows the last forty bars.
+    mainToSub();
+    main.timeScale().subscribeVisibleLogicalRangeChange(mainToSub);
+    sub.timeScale().subscribeVisibleLogicalRangeChange(subToMain);
+    return () => {
+      try { main.timeScale().unsubscribeVisibleLogicalRangeChange(mainToSub); } catch { /* disposed */ }
+      try { sub.timeScale().unsubscribeVisibleLogicalRangeChange(subToMain); } catch { /* disposed */ }
+    };
+    /* Deliberately not keyed on the CVD data. That changes identity on every
+       analysis poll, and re-subscribing both handlers every few seconds to
+       re-establish a link that has not changed is churn for nothing. The two
+       chart instances are the only thing this effect depends on, and the
+       creation effect above sets its ref before this one reads it. */
+  }, [ready, overlays.cvdCandles]);
+
+  /**
+   * The cumulative-delta line's own scale.
    *
-   * So the candles claim more room when they are on, and the price candles
-   * give it up. That is the trade the toggle is asking for.
+   * Only the line lives here now. The candles used to share it, and the two
+   * disagreed about how much height the scale should take: a line reads
+   * perfectly well in a fifth of the pane, and candles in that same strip
+   * collapsed into a row of dashes with no readable body or wick. That is what
+   * moved them into a pane of their own.
    */
   useEffect(() => {
     const chart = chartRef.current;
-    if (!ready || !chart || disposedRef.current) return;
-    if (!overlays.cvd && !overlays.cvdCandles) return;
+    if (!ready || !chart || disposedRef.current || !overlays.cvd) return;
     try {
-      chart.priceScale("cvd").applyOptions({
-        scaleMargins: overlays.cvdCandles
-          ? { top: 0.04, bottom: 0.62 }
-          : { top: 0.05, bottom: 0.75 },
-      });
+      chart.priceScale("cvd").applyOptions({ scaleMargins: { top: 0.05, bottom: 0.75 } });
     } catch {
       /* disposed */
     }
-  }, [ready, overlays.cvd, overlays.cvdCandles]);
+  }, [ready, overlays.cvd]);
 
   // --- Open interest: one line, one colour, its own scale ---
   //
@@ -2332,7 +2457,13 @@ export default function TradingChart({
     liveKline != null ? liveKline.close >= liveKline.open : true;
 
   return (
-    <div className="relative h-full w-full">
+    /* A column, because the CVD pane is a genuine pane below the chart rather
+       than an overlay on it. Everything that positions itself against the
+       chart — the overlay canvas, the inspector, the price badge — stays
+       inside the inner box, so its coordinates keep meaning what they meant
+       when the chart was the whole component. */
+    <div className="relative flex h-full w-full flex-col">
+      <div className="relative min-h-0 flex-1">
       <div ref={containerRef} className="h-full w-full" />
       {/* z-[3] is load-bearing. lightweight-charts sets an explicit z-index of
           1 and 2 on its own pane canvases, and a positioned element with
@@ -2392,6 +2523,34 @@ export default function TradingChart({
             title="Time remaining until the current candle closes"
           >
             {countdown}
+          </span>
+        </div>
+      )}
+      </div>
+
+      {/* ---------------- Cumulative delta, its own pane ----------------
+          A second chart rather than an overlay scale on the first. The
+          library is v4, which has no real panes, and the overlay version put
+          the candles in a strip a fifth of the pane tall where every body
+          collapsed to a dash — readable as a line, useless as candles.
+
+          Its own chart means its own price scale, which autoscales to the
+          delta's range instead of to price, so the highs and lows are legible
+          and the axis can be dragged to rescale by hand. The time scales are
+          kept in step below. */}
+      {overlays.cvdCandles && (
+        <div className="relative shrink-0 border-t border-white/10" style={{ height: CVD_PANE_HEIGHT }}>
+          <div ref={cvdPaneRef} className="h-full w-full" />
+          <span className="pointer-events-none absolute left-2 top-1 z-10 font-mono text-[9px] uppercase tracking-[0.14em] text-slate-500">
+            CVD
+            {cvdCandles && cvdCandles.fidelity !== "sub_bar" && (
+              <span
+                className="ml-1 normal-case tracking-normal text-slate-600"
+                title={cvdCandles.caveats.join(" ")}
+              >
+                · {cvdCandles.fidelity === "bar" ? "no wicks" : "part wicks"}
+              </span>
+            )}
           </span>
         </div>
       )}
