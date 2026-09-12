@@ -30,6 +30,8 @@ import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
 import { barIntervalSeconds, thinMarkers } from "./markerLayout";
+import { COLUMN_GAP_PX, clusterFit, deltaHeat, mergeRows, volumeHeat, widestLabel } from "./clusterLayout";
+import { buildCvdCandles } from "@/engines/cvdCandles";
 import { SESSIONS } from "@/engines/weekProfile";
 
 interface Props {
@@ -174,6 +176,8 @@ export default function TradingChart({
    * single colour, so rising and falling stretches need one each.
    */
   const cvdSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  /** Cumulative delta as candles — shares the CVD price scale so the two align. */
+  const cvdCandleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const oiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const liqCumSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
@@ -317,6 +321,7 @@ export default function TradingChart({
       maSeriesRef.current.clear();
       vwapSeriesRef.current = null;
       cvdSeriesRef.current = null;
+      cvdCandleSeriesRef.current = null;
       oiSeriesRef.current = null;
       liqCumSeriesRef.current = null;
       priceLinesRef.current = [];
@@ -679,7 +684,6 @@ export default function TradingChart({
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
-      chart.priceScale("cvd").applyOptions({ scaleMargins: { top: 0.05, bottom: 0.75 } });
     }
     try {
       cvdSeriesRef.current.setData(
@@ -689,6 +693,98 @@ export default function TradingChart({
       /* disposed between the guard and the call */
     }
   }, [ready, analysis, overlays.cvd]);
+
+  /**
+   * Cumulative delta as candles.
+   *
+   * Shares the CVD line's price scale on purpose: with both switched on they
+   * describe the same quantity, and putting them on separate scales would draw
+   * two differently-shaped versions of one series.
+   *
+   * The wicks come from the intrabar reconstruction the analysis already
+   * carries. Bars outside that window are drawn wickless, which is the honest
+   * rendering — their true range is unknown and at least the body — rather
+   * than a straight line the engine never measured.
+   */
+  const cvdCandles = useMemo(
+    () =>
+      overlays.cvdCandles
+        ? buildCvdCandles(candles, analysis?.deltaExcursion.available ? analysis.deltaExcursion.bars : null)
+        : null,
+    [overlays.cvdCandles, candles, analysis]
+  );
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!ready || !chart || disposedRef.current) return;
+    if (!cvdCandles || cvdCandles.candles.length === 0) {
+      if (cvdCandleSeriesRef.current) {
+        try { chart.removeSeries(cvdCandleSeriesRef.current); } catch { /* disposed */ }
+        cvdCandleSeriesRef.current = null;
+      }
+      return;
+    }
+    if (!cvdCandleSeriesRef.current) {
+      /* Blue up, violet down — deliberately outside the bull/bear palette.
+         These sit on their own scale but share the pane, and price routinely
+         trades through the band they occupy. Pink-for-down put a CVD candle
+         two shades from a bear price candle right where the two overlap, and
+         at a glance the eye read one as the other. */
+      cvdCandleSeriesRef.current = chart.addCandlestickSeries({
+        upColor: "rgba(56,189,248,0.5)",
+        downColor: "rgba(167,139,250,0.5)",
+        borderUpColor: CVD_COLOUR,
+        borderDownColor: "#a78bfa",
+        wickUpColor: CVD_COLOUR,
+        wickDownColor: "#a78bfa",
+        priceScaleId: "cvd",
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+    }
+    try {
+      cvdCandleSeriesRef.current.setData(
+        cvdCandles.candles.map((c) => ({
+          time: c.time as UTCTimestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }))
+      );
+    } catch {
+      /* disposed between the guard and the call */
+    }
+  }, [ready, cvdCandles]);
+
+  /**
+   * The cumulative-delta price scale, owned in one place.
+   *
+   * Both CVD overlays sit on this scale, and both used to set its margins when
+   * they created their series — so whichever effect happened to run last
+   * decided the height. That is fine while they agree and wrong the moment
+   * they do not, which is exactly the case here: a line reads perfectly well
+   * in a fifth of the pane, and candles in that same strip collapse into a row
+   * of dashes with no readable body or wick, which defeats the only reason to
+   * draw them as candles.
+   *
+   * So the candles claim more room when they are on, and the price candles
+   * give it up. That is the trade the toggle is asking for.
+   */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!ready || !chart || disposedRef.current) return;
+    if (!overlays.cvd && !overlays.cvdCandles) return;
+    try {
+      chart.priceScale("cvd").applyOptions({
+        scaleMargins: overlays.cvdCandles
+          ? { top: 0.04, bottom: 0.62 }
+          : { top: 0.05, bottom: 0.75 },
+      });
+    } catch {
+      /* disposed */
+    }
+  }, [ready, overlays.cvd, overlays.cvdCandles]);
 
   // --- Open interest: one line, one colour, its own scale ---
   //
@@ -1723,6 +1819,119 @@ export default function TradingChart({
             nothing. It used to print a line saying why; that line was itself
             clutter on the chart, and the toggle's own tooltip already carries
             the explanation without taking up pixels. */
+      /* ---------------- Cluster numbers on the candles ----------------
+            The footprint printed where it belongs: traded volume at each price
+            on the left of the bar, net delta on the right, heat-shaded so the
+            eye lands on the heavy level before it reads any figure.
+
+            Drawn last of the per-candle overlays so it sits on top of them,
+            and only when `clusterFit` says there is genuinely room. Twelve
+            rows of two numbers needs a wide bar AND a tall one; below either
+            threshold this draws nothing at all, because a smear of overlapping
+            digits hides the price action it was meant to annotate. */
+      if (overlays.clusterNumbers && analysis && analysis.footprint.candles.length > 0) {
+        const fmt = (v: number) => (Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(v >= 100 ? 0 : 1));
+        ctx.textBaseline = "middle";
+        /* Whether anything qualified, and why not.
+           Unlike the other per-candle overlays this one degrades to literally
+           nothing — the contract bubbles still draw a circle at any zoom, but
+           two columns of figures either fit or they do not. A toggle that
+           silently does nothing reads as broken, so when no bar qualified the
+           reason is printed once, small, in the corner. */
+        let drew = 0;
+        let refusal = "";
+
+        for (const fp of analysis.footprint.candles) {
+          const x = xOf(fp.time);
+          if (x == null) continue;
+          const xn = Number(x);
+          if (xn < -barWidth || xn > rightEdge + barWidth) continue;
+
+          const yHigh = yOf(fp.high);
+          const yLow = yOf(fp.low);
+          if (yHigh == null || yLow == null) continue;
+          const rangePx = Math.abs(Number(yLow) - Number(yHigh));
+
+          const volumes = fp.cells.map((c) => c.bidVolume + c.askVolume);
+          const deltas = fp.cells.map((c) => c.delta);
+          const widest = Math.max(
+            widestLabel(volumes, fmt),
+            widestLabel(deltas, (v) => (v >= 0 ? fmt(v) : `-${fmt(Math.abs(v))}`))
+          );
+          const fit = clusterFit(barWidth, rangePx, fp.cells.length, widest);
+          if (!fit.show) {
+            if (!refusal) refusal = fit.reason;
+            continue;
+          }
+          let drewBar = false;
+
+          /* Merged down to the rows this bar can hold, so a short candle shows a
+             coarser ladder instead of nothing at all. */
+          const rows = mergeRows(volumes, deltas, fit.rowsToDraw);
+          const barMaxVolume = Math.max(...rows.map((r) => r.volume), 0);
+          const barMaxAbsDelta = Math.max(...rows.map((r) => Math.abs(r.delta)), 0);
+          const left = xn - barWidth / 2;
+          const mid = left + fit.columnWidth;
+          /* Past the right edge the columns run under the price axis, where
+             the figures collide with its labels and neither is readable. */
+          if (left < 0 || mid + COLUMN_GAP_PX + fit.columnWidth > rightEdge) {
+            continue;
+          }
+          drewBar = true;
+          ctx.font = `${fit.fontPx}px ui-monospace, monospace`;
+
+          /* An opaque backing behind the whole block, before any heat goes on.
+             The heat fills are deliberately light — they have to read as a
+             gradient across twelve rows — and over a bright candle body that
+             leaves the figures sitting on red. The candles are noise for this
+             overlay's job, the same way they are behind the contract bubbles. */
+          ctx.fillStyle = "rgba(9,12,20,0.88)";
+          ctx.fillRect(left, Number(yHigh), barWidth, rangePx);
+
+          for (let r = 0; r < rows.length; r++) {
+            const cell = rows[r];
+            const volume = cell.volume;
+            /* rows run low → high, but the canvas runs top → bottom, so the
+               last row is the top one. Getting this backwards prints every
+               bar's footprint upside down, which reads as plausible nonsense. */
+            const rowTop = Number(yHigh) + (rows.length - 1 - r) * fit.rowHeight;
+            const centreY = rowTop + fit.rowHeight / 2;
+
+            const vHeat = volumeHeat(volume, barMaxVolume);
+            const dHeat = deltaHeat(cell.delta, barMaxAbsDelta);
+
+            // Volume cell: a neutral wash that brightens toward the bar's own
+            // point of control.
+            ctx.fillStyle = `rgba(148,163,184,${(0.08 + vHeat * 0.34).toFixed(3)})`;
+            ctx.fillRect(left, rowTop, fit.columnWidth, fit.rowHeight - 1);
+            // Delta cell: coloured by sign, intensity by magnitude.
+            ctx.fillStyle =
+              dHeat >= 0
+                ? `rgba(56,189,248,${(0.08 + dHeat * 0.5).toFixed(3)})`
+                : `rgba(244,63,94,${(0.08 + -dHeat * 0.5).toFixed(3)})`;
+            ctx.fillRect(mid + COLUMN_GAP_PX, rowTop, fit.columnWidth, fit.rowHeight - 1);
+
+            ctx.textAlign = "right";
+            ctx.fillStyle = `rgba(226,232,240,${(0.6 + vHeat * 0.4).toFixed(3)})`;
+            ctx.fillText(fmt(volume), mid - 3, centreY);
+            ctx.fillStyle = `rgba(241,245,249,${(0.6 + Math.abs(dHeat) * 0.4).toFixed(3)})`;
+            ctx.fillText(
+              cell.delta >= 0 ? fmt(cell.delta) : `-${fmt(Math.abs(cell.delta))}`,
+              mid + COLUMN_GAP_PX + fit.columnWidth - 3,
+              centreY
+            );
+          }
+          if (drewBar) drew++;
+        }
+        if (drew === 0 && refusal) {
+          ctx.textAlign = "left";
+          ctx.font = "10px ui-monospace, monospace";
+          ctx.fillStyle = "rgba(148,163,184,0.75)";
+          ctx.fillText(`CLUSTERS · ${refusal}`, 10, 16);
+        }
+        ctx.textBaseline = "alphabetic";
+      }
+
       if (overlays.contractBubbles && candles.length > 5) {
         const MIN_BAR_W = 5;
         if (barWidth >= MIN_BAR_W) {
