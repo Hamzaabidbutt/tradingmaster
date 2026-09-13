@@ -1,0 +1,126 @@
+name: Scan ledger
+
+# Records what every scanner surfaced, and scores the rows that have had time
+# to play out. The work runs in your Vercel functions — this workflow only
+# supplies the clock, because a serverless app has nothing running between page
+# loads.
+#
+# This is the file that makes the scorecard fill itself. Nothing here needs a
+# human: the pass writes its own rows and scores its own backlog.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   APP_URL      https://your-app.vercel.app   (no trailing slash)
+#   CRON_SECRET  the same value set in the app's environment
+#
+# Hourly, matching the 1h default. Rows are keyed on the bar the scan read, so
+# running more often than the bar closes cannot produce new rows — it would
+# only re-read the same candles at full Binance weight and find duplicates.
+#
+# The daily job below exists for the scanners that read 1d candles regardless
+# of what they are asked; without it those never get recorded at all.
+
+on:
+  schedule:
+    # Five past the hour, so the 1h candle has definitely closed and been
+    # published before the sweep reads it.
+    - cron: "5 * * * *"
+    # Daily, five past midnight UTC, for the engines that only read 1d candles.
+    - cron: "5 0 * * *"
+  workflow_dispatch:
+    inputs:
+      timeframe:
+        description: "Timeframe to sweep (blank = 1h)"
+        type: string
+        default: ""
+      scanners:
+        description: "Comma-separated scanner names (blank = all)"
+        type: string
+        default: ""
+      only:
+        description: "record, score, or blank for both"
+        type: string
+        default: ""
+
+# A slow sweep must not have a second run pile up behind it.
+concurrency:
+  group: scan-ledger
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check configuration
+        env:
+          # APP_URL is a public deployment URL, not a secret, so it is accepted
+          # from either tab — putting it under Variables is a reasonable thing
+          # to do and should not silently produce a blank.
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          missing=""
+          [ -z "$APP_URL" ] && missing="APP_URL"
+          [ -z "$CRON_SECRET" ] && missing="${missing:+$missing and }CRON_SECRET"
+
+          if [ -n "$missing" ]; then
+            echo "::error::$missing is empty in this job."
+            echo "Set it under Settings → Secrets and variables → Actions."
+            echo ""
+            echo "If you believe you already did, check these in order:"
+            echo "  1. The 'Secrets' tab, not the 'Variables' tab beside it."
+            echo "     CRON_SECRET must be a secret. APP_URL may be either."
+            echo "  2. A REPOSITORY secret, not an Environment secret — environment"
+            echo "     secrets only reach jobs that declare 'environment:'."
+            echo "  3. The exact names, uppercase, no trailing spaces."
+            echo "  4. Both must exist in GitHub as well as in the app's own"
+            echo "     environment. GitHub calls the sweep; the app runs it."
+            exit 1
+          fi
+
+      - name: Record and score
+        env:
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TF: ${{ inputs.timeframe }}
+          SCANNERS: ${{ inputs.scanners }}
+          ONLY: ${{ inputs.only }}
+          # The daily cron sweeps 1d; every other trigger uses the 1h default.
+          IS_DAILY: ${{ github.event.schedule == '5 0 * * *' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          tf="$TF"
+          [ -z "$tf" ] && [ "$IS_DAILY" = "1" ] && tf="1d"
+          url="${APP_URL%/}/api/ledger?x=1"
+          [ -n "$tf" ] && url="${url}&timeframe=${tf}"
+          [ -n "$SCANNERS" ] && url="${url}&scanners=${SCANNERS}"
+          [ -n "$ONLY" ] && url="${url}&only=${ONLY}"
+
+          # The secret goes in a header, never the URL: query strings end up in
+          # access logs and in this job's own output.
+          # --max-time sits above the function's own 60s limit so a slow sweep
+          # is reported by the app rather than cut off here.
+          body=$(mktemp)
+          code=$(curl -sS --max-time 90 -o "$body" -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "$url")
+
+          echo "HTTP $code"
+          cat "$body"
+          echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::Ledger pass failed with HTTP $code"
+            exit 1
+          fi
+
+          # Surface the run on the workflow summary page, so the history is
+          # readable without opening each job.
+          {
+            echo "### Ledger pass"
+            echo ""
+            echo '```json'
+            cat "$body"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
