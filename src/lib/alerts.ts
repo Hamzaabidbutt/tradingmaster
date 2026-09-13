@@ -23,7 +23,11 @@ export type AlertKind =
   /** a signal reached its final target, stopped out or expired */
   | "signal.closed"
   /** forced flow printed at an extreme */
-  | "liqspike";
+  | "liqspike"
+  /** a change-of-character sequence arrived at its retest level */
+  | "setup.thrust"
+  /** consecutive candles started walking a straight line */
+  | "setup.ladder";
 
 export interface AlertPayload {
   title: string;

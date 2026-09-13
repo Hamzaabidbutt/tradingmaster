@@ -180,9 +180,59 @@ set an allowlist on the host:
 ALERT_KINDS="liqspike"
 ```
 
-Valid kinds are `signal.opened`, `signal.confluence`, `signal.closed` and
-`liqspike`; leave it unset to receive everything. Once set, *untagged* alerts
+Valid kinds are `signal.opened`, `signal.confluence`, `signal.institutional`,
+`signal.closed`, `liqspike`, `setup.thrust` and `setup.ladder`; leave it unset
+to receive everything. Once set, *untagged* alerts
 are blocked too, so an allowlist stays one as new alert types are added later.
+
+### Setup alerts
+
+The two setup scanners push to the same channels, on their own schedule
+(`.github/workflows/setup-alerts.yml`, hourly by default) via
+`/api/alerts/setups`, guarded by the same `CRON_SECRET`.
+
+```
+ALERT_KINDS="setup.thrust,setup.ladder"
+```
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `SETUP_ALERT_TIMEFRAME` | `1h` | Keep the cron schedule in step with it. |
+| `SETUP_ALERT_DEPTH` | `80` | Symbols swept, by volume rank. |
+| `SETUP_ALERT_COOLDOWN_MIN` | `120` | Per symbol, so one coin cannot spam. |
+| `SETUP_ALERT_MAX_PER_RUN` | `5` | Caps a violent session. |
+| `SETUP_ALERT_THRUST_MIN_SCORE` | `3` | Checks passed out of five. |
+| `SETUP_ALERT_THRUST_MIN_BOOM_RATE` | `0` (off) | See below. |
+| `SETUP_ALERT_THRUST_MIN_PRECEDENT` | `5` | Cases needed before the rate filters. |
+| `SETUP_ALERT_LADDER_MIN_BARS` | `6` | Steps in the run. |
+| `SETUP_ALERT_LADDER_MIN_R2` | `0.9` | Straightness, 0-1. |
+| `SETUP_ALERT_LADDER_MIN_BODY` | `0.5` | Share of bars closing with the run. |
+
+Three things about these alerts are deliberate and worth knowing before tuning
+them:
+
+**Only `armed` setups are sent.** Not the ones that have already expanded,
+however good they look in the scanner. By then the level is behind price, so
+the alert would be an invitation to chase arriving with the authority of a
+notification.
+
+**One alert per event, not per sweep.** The dedupe key is built from the
+event's own timestamp — the change of character, or the bar a ladder started
+on — so a setup that sits at its level for six bars produces one message. The
+consequence is that a second visit to the *same* level does not re-alert.
+
+**The precedent filter is off by default.** `SETUP_ALERT_THRUST_MIN_BOOM_RATE`
+lets you require that a symbol's own history shows follow-through, but the
+default does not make that judgement for you. When it is on it applies only to
+symbols with at least `MIN_PRECEDENT` cases: a thin record is no record, not a
+bad one, and filtering on it would silently drop every symbol whose history is
+simply too short.
+
+The alert body states the precedent as a count with a denominator ("7 of 11
+previous reached 3 ATR before losing the level"), never as a percentage. That
+is not stylistic. An alert is read in two seconds on a lock screen with no
+surrounding context, which is exactly where "64%" stops being a description of
+eleven past bars and becomes a belief about the next one.
 
 ### Tuning
 

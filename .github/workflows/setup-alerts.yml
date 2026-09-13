@@ -1,0 +1,114 @@
+name: Setup alerts
+
+# Calls the deployed app's setup-alert endpoint on a schedule. The sweep itself
+# runs in your Vercel functions — this workflow only supplies the clock, because
+# a serverless app has nothing running between page loads.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   APP_URL      https://your-app.vercel.app   (no trailing slash)
+#   CRON_SECRET  the same value set in the app's environment
+#
+# Unlike the liquidation sweep, this runs hourly rather than every five
+# minutes. The engines read closed candles, and the default timeframe is 1h —
+# sweeping more often than the bar closes re-reads the same candles at full
+# Binance weight and cannot see anything new. If you point SETUP_ALERT_TIMEFRAME
+# at a faster bar, raise the frequency here to match it and not beyond.
+
+on:
+  schedule:
+    # Five past the hour, so the 1h candle has definitely closed and been
+    # published before the sweep reads it.
+    - cron: "5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Evaluate and report without sending or recording anything"
+        type: boolean
+        default: true
+      timeframe:
+        description: "Override SETUP_ALERT_TIMEFRAME for this run"
+        type: string
+        default: ""
+      kinds:
+        description: "thrust, ladder, or both (blank = both)"
+        type: string
+        default: ""
+
+# A slow sweep must not have a second run pile up behind it.
+concurrency:
+  group: setup-alerts
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check configuration
+        env:
+          # APP_URL is a public deployment URL, not a secret, so it is accepted
+          # from either tab — putting it under Variables is a reasonable thing
+          # to do and should not silently produce a blank.
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          missing=""
+          [ -z "$APP_URL" ] && missing="APP_URL"
+          [ -z "$CRON_SECRET" ] && missing="${missing:+$missing and }CRON_SECRET"
+
+          if [ -n "$missing" ]; then
+            echo "::error::$missing is empty in this job."
+            echo "Set it under Settings → Secrets and variables → Actions."
+            echo ""
+            echo "If you believe you already did, check these in order:"
+            echo "  1. The 'Secrets' tab, not the 'Variables' tab beside it."
+            echo "     CRON_SECRET must be a secret. APP_URL may be either."
+            echo "  2. A REPOSITORY secret, not an Environment secret — environment"
+            echo "     secrets only reach jobs that declare 'environment:'."
+            echo "  3. The exact names, uppercase, no trailing spaces."
+            echo "  4. Both must exist in GitHub as well as in the app's own"
+            echo "     environment. GitHub calls the sweep; the app runs it."
+            exit 1
+          fi
+
+      - name: Sweep for setups
+        env:
+          APP_URL: ${{ secrets.APP_URL || vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DRY: ${{ inputs.dry_run && '1' || '0' }}
+          TF: ${{ inputs.timeframe }}
+          KINDS: ${{ inputs.kinds }}
+        run: |
+          set -euo pipefail
+          url="${APP_URL%/}/api/alerts/setups?dry=${DRY}"
+          [ -n "$TF" ] && url="${url}&timeframe=${TF}"
+          [ -n "$KINDS" ] && url="${url}&kinds=${KINDS}"
+
+          # The secret goes in a header, never the URL: query strings end up in
+          # access logs and in this job's own output.
+          # --max-time sits above the function's own 60s limit so a slow sweep
+          # is reported by the app rather than cut off here.
+          body=$(mktemp)
+          code=$(curl -sS --max-time 90 -o "$body" -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "$url")
+
+          echo "HTTP $code"
+          cat "$body"
+          echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::Setup alert sweep failed with HTTP $code"
+            exit 1
+          fi
+
+          # Surface the run on the workflow summary page, so the history is
+          # readable without opening each job.
+          {
+            echo "### Setup sweep"
+            echo ""
+            echo '```json'
+            cat "$body"
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
