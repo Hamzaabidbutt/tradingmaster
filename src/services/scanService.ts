@@ -28,6 +28,11 @@ import {
   MIN_BARS as LADDER_MIN_BARS,
   strongestLadder,
 } from "@/engines/candleLadder";
+import {
+  RetestThrustSetup,
+  ThrustState,
+  detectRetestThrust,
+} from "@/engines/retestThrust";
 import { analyzeMarket } from "@/engines/analyzer";
 import { evaluateStrategies } from "@/engines/strategies";
 import { getStrategyWeights } from "./signalService";
@@ -1672,6 +1677,130 @@ export async function scanCandleLadder(opts: {
     broken: entries.filter((e) => e.ladder.broken).sort(byScore).slice(0, 20),
     scanned: entries.length + noRun,
     noRun,
+    failed_count: failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Change of character → retest → thrust
+ * ------------------------------------------------------------------ */
+
+export interface RetestThrustEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  /** open time of the last closed bar this read was built from, unix seconds */
+  barTime: number;
+  price: number;
+  setup: RetestThrustSetup;
+}
+
+/**
+ * Grouped by state, ordered by how much entry is left.
+ *
+ * `armed` first, and deliberately so: it is the state with the least
+ * confirmation and the only one where the level is still close enough to stop
+ * against. Sorting by score instead would put the setups that have already
+ * expanded — the ones that look best precisely because they already worked —
+ * at the top of a page someone reads looking for something to take.
+ */
+export interface RetestThrustScan {
+  timeframe: string;
+  /** price is in the retest zone on the last closed bar */
+  armed: RetestThrustEntry[];
+  /** retest held, nothing has expanded yet */
+  held: RetestThrustEntry[];
+  /** the expansion is under way */
+  thrusting: RetestThrustEntry[];
+  /** ran too far from the level to define risk against */
+  extended: RetestThrustEntry[];
+  /** closed back through the level */
+  failed: RetestThrustEntry[];
+  scanned: number;
+  /** symbols with no sequence at all — most of the universe, most of the time */
+  noSetup: number;
+  failed_count: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for the change-of-character → retest → thrust sequence.
+ *
+ * One request per symbol, so this runs at the full default depth. The engine
+ * also studies each symbol's own history for previous instances, which costs
+ * nothing extra: the precedent comes out of the same candles already fetched.
+ */
+export async function scanRetestThrust(opts: {
+  timeframe: Timeframe;
+  depth?: number;
+  concurrency?: number;
+}): Promise<RetestThrustScan> {
+  const ranked = takeDepth(await rankUniverse(), opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? 12, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      barTime: candles[candles.length - 1]?.time ?? 0,
+      price: candles[candles.length - 1]?.close ?? 0,
+      setup: detectRetestThrust(candles),
+    };
+  });
+
+  const entries: RetestThrustEntry[] = [];
+  let failed = 0;
+  let noSetup = 0;
+  for (const res of results) {
+    // undefined = the deadline hit before this symbol was reached. Not a
+    // failure — counting it as one would report a healthy sweep as broken.
+    if (!res) continue;
+    if (res.status !== "fulfilled") {
+      failed++;
+      continue;
+    }
+    const { setup, ...rest } = res.value;
+    /* "forming" means the leg and the base are there but nothing has changed
+       character. That is not a setup yet, and listing it would bury the four
+       states that are. */
+    if (!setup || setup.state === "forming") {
+      noSetup++;
+      continue;
+    }
+    entries.push({ ...rest, setup });
+  }
+
+  const byScore = (a: RetestThrustEntry, b: RetestThrustEntry) => {
+    if (b.setup.score !== a.setup.score) return b.setup.score - a.setup.score;
+    /* Within a state and score, the symbol whose own history says this has
+       gone somewhere before ranks first — with the count as the tie-break, so
+       a 3-of-3 does not outrank a 7-of-9. */
+    const aw = a.setup.precedent.boomRate * Math.min(1, a.setup.precedent.count / 5);
+    const bw = b.setup.precedent.boomRate * Math.min(1, b.setup.precedent.count / 5);
+    return bw - aw;
+  };
+  const inState = (state: ThrustState, cap: number) =>
+    entries.filter((e) => e.setup.state === state).sort(byScore).slice(0, cap);
+
+  return {
+    timeframe: opts.timeframe,
+    armed: inState("armed", 40),
+    held: inState("held", 30),
+    thrusting: inState("thrusting", 20),
+    /* Capped harder than the states with an entry left. They are here so the
+       sequence can be studied and so a reader can see what was rejected, not
+       to compete for attention with setups that are still takeable. */
+    extended: inState("extended", 15),
+    failed: inState("failed", 15),
+    scanned: entries.length + noSetup,
+    noSetup,
     failed_count: failed,
     scannedAt: Math.floor(Date.now() / 1000),
   };
