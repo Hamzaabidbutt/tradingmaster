@@ -185,6 +185,44 @@ Valid kinds are `signal.opened`, `signal.confluence`, `signal.institutional`,
 to receive everything. Once set, *untagged* alerts
 are blocked too, so an allowlist stays one as new alert types are added later.
 
+### The scorecard
+
+Every scanner in this app renders a page, and until the ledger existed none of
+them had a *record*. `/ledger` answers the question that makes every other
+threshold checkable: which scanners actually produce anything.
+
+`.github/workflows/scan-ledger.yml` runs hourly (plus once daily for the
+engines that only read 1d candles) and calls `/api/ledger`, which records what
+each scanner surfaced and scores the rows whose window has closed. Nothing is
+entered by hand.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `LEDGER_DEPTH` | `60` | Symbols per pass, by volume rank. |
+| `LEDGER_SCORE_LIMIT` | `200` | Rows scored per call; the backlog drains across passes. |
+
+Requires `DATABASE_URL`. Without it the pass still runs and writes nothing, and
+the page says so.
+
+**What the numbers are.** A row is written per setup per bar — keyed on the bar
+the scan read, so a setup that persists across six passes is one row, not six.
+Six copies would not be six pieces of evidence; they are one setup counted six
+times, and they would make every rate a function of how often the cron runs.
+
+Outcomes are measured from the **close of the bar the scan read**, identically
+for every scanner — not from whatever entry each one proposes, which would need
+a fill model. Which threshold came *first* decides it: a setup that runs 4 ATR
+in your favour after a 1 ATR move against you is recorded as a loss, because
+nobody was still in it. Where both fall inside one candle the adverse side is
+assumed first, which is the pessimistic reading and is chosen deliberately —
+the optimistic one cannot be checked without tick data, and an unverifiable
+assumption that favours the product is the kind that never gets revisited.
+
+**What they are not.** Measured frequencies over whatever has accumulated, not
+edges and not forecasts. A rate is withheld entirely below 20 scored rows. The
+ledger also cannot see what the scanners never surfaced, so the claim is always
+"setups this scanner shows do X", never "setups like this do X".
+
 ### Setup alerts
 
 The two setup scanners push to the same channels, on their own schedule

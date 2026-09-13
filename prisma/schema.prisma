@@ -79,13 +79,13 @@ enum SignalSource {
 // to learn a second id format.
 
 model User {
-  id          String        @id @default(cuid()) @map("_id")
-  email       String        @unique
+  id          String           @id @default(cuid()) @map("_id")
+  email       String           @unique
   password    String
   name        String?
-  role        Role          @default(VIEWER)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  role        Role             @default(VIEWER)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
   preferences UserPreference[]
   alerts      AlertChannel[]
   auditLogs   AuditLog[]
@@ -104,38 +104,38 @@ model UserPreference {
 }
 
 model Signal {
-  id               String       @id @default(cuid()) @map("_id")
-  symbol           String
-  timeframe        String
-  side             SignalSide
-  entry            Float
-  stopLoss         Float
-  tp1              Float
-  tp2              Float
-  tp3              Float
-  riskReward       Float
-  confidence       Float
-  confidenceLabel  String
-  expectedMovePct  Float
-  estHoldingMin    Int
-  reasoning        Json
-  invalidation     Json
-  strategyScores   Json
-  marketSnapshot   Json
-  status           SignalStatus @default(ACTIVE)
-  resultPnlPct     Float?
-  closedPrice      Float?
-  closedAt         DateTime?
-  createdAt        DateTime     @default(now())
+  id              String       @id @default(cuid()) @map("_id")
+  symbol          String
+  timeframe       String
+  side            SignalSide
+  entry           Float
+  stopLoss        Float
+  tp1             Float
+  tp2             Float
+  tp3             Float
+  riskReward      Float
+  confidence      Float
+  confidenceLabel String
+  expectedMovePct Float
+  estHoldingMin   Int
+  reasoning       Json
+  invalidation    Json
+  strategyScores  Json
+  marketSnapshot  Json
+  status          SignalStatus @default(ACTIVE)
+  resultPnlPct    Float?
+  closedPrice     Float?
+  closedAt        DateTime?
+  createdAt       DateTime     @default(now())
   /// When price actually traded at the entry. Null while PENDING, and null
   /// forever on an UNFILLED signal. Nullable rather than defaulted because
   /// every signal written before fills were checked genuinely has no answer —
   /// backfilling a timestamp would assert a fill that was never verified.
-  filledAt         DateTime?
+  filledAt        DateTime?
   /// Bars waited between publication and the fill. Recorded so "our entries
   /// are unreachable" and "our entries fill instantly at the worst price" are
   /// distinguishable rather than both showing up as a win rate.
-  barsToFill       Int?
+  barsToFill      Int?
 
   // --- Attribution & outcome (all nullable on purpose) ---
   //
@@ -146,16 +146,16 @@ model Signal {
   // any of them required would break every read of the existing collection.
   //
   /// null on signals written before attribution existed — read as COMPOSITE.
-  source           SignalSource?
+  source          SignalSource?
   /// AnalystVerdict[] — what each independent analyst said at signal time.
   /// This is what makes per-analyst win rates measurable rather than assumed.
-  analystVerdicts  Json?
+  analystVerdicts Json?
   /// The full ConfluenceSetup, when source = CONFLUENCE.
-  confluence       Json?
+  confluence      Json?
   /// The full InstitutionalSetup, when source = INSTITUTIONAL. Stored so a
   /// closed signal can be reviewed against the evidence that opened it —
   /// otherwise the record says a footprint failed without saying which one.
-  institutional    Json?
+  institutional   Json?
   /// A signal the engine produced but did not take, because an ACTIVE signal
   /// already occupied this symbol+timeframe slot.
   ///
@@ -167,39 +167,39 @@ model Signal {
   ///
   /// Nullable and read as false: rows written before this existed were all
   /// real, taken signals.
-  shadow           Boolean?
+  shadow          Boolean?
   /// BTC's structural regime at the moment this signal was created —
   /// "bullish" | "bearish" | "neutral". Stored as a scalar so per-regime win
   /// rates are a groupBy rather than a scan.
   ///
   /// Alt setups do not behave the same way in a BTC downtrend as in an uptrend,
   /// and without this tag that difference is invisible in the aggregate.
-  regime           String?
+  regime          String?
   /// The fuller regime read: BTC trend, volatility band, distance from its
   /// moving average. Kept alongside the scalar so a closed signal can be
   /// reviewed against the conditions it was born into.
-  marketRegime     Json?
+  marketRegime    Json?
   /// Machine-readable outcome class, set when the signal closes:
   /// false_breakout | failed_rejection | range_invalidation | ...
-  outcomeReason    String?
+  outcomeReason   String?
   /// OutcomeAnalysis — excursion, who was right, biggest contributor.
-  outcomeAnalysis  Json?
+  outcomeAnalysis Json?
   /// The stop actually in force, after management has moved it.
   ///
   /// Separate from `stopLoss`, which stays as the signal was opened: comparing
   /// the two is what says whether a trade was protected before it closed, and
   /// overwriting the original would erase the risk the signal was taken with.
-  managedStop      Float?
+  managedStop     Float?
   /// Where management has got to: initial | breakeven | trail_tp1 | trail_tp2.
-  managementStage  String?
+  managementStage String?
   /// Timestamped notes from each management pass that changed something —
   /// stop moves and early exits, with the reasoning that produced them.
-  managementLog    Json?
+  managementLog   Json?
   /// Why the trade was closed ahead of its stop, when it was:
   /// structure_flip | adverse_close | stall.
-  earlyExitReason  String?
+  earlyExitReason String?
 
-  learning         LearningRecord[]
+  learning LearningRecord[]
 
   @@index([symbol, timeframe])
   @@index([status])
@@ -216,23 +216,23 @@ model Signal {
 /// (universe × timeframes) rows instead of growing without limit — the worker
 /// rewrites the same row every time it revisits a symbol.
 model ScanResult {
-  id          String   @id @default(cuid()) @map("_id")
-  symbol      String
-  timeframe   String
+  id             String   @id @default(cuid()) @map("_id")
+  symbol         String
+  timeframe      String
   /// LONG | SHORT | NO_TRADE
-  decision    String
-  confidence  Float
-  price       Float
+  decision       String
+  confidence     Float
+  price          Float
   /// 24h quote volume at scan time — the ranking key for "best setups".
-  quoteVolume Float
+  quoteVolume    Float
   /// 24h price change at scan time. Nullable: rows written before this field
   /// existed have no value, and the dashboard prints "—" rather than +0.00%,
   /// which would read as "flat" instead of "unknown".
   priceChangePct Float?
   /// The full ConfluenceSetup so the dashboard can render supporting analysis
   /// without re-running the engines.
-  setup       Json
-  scannedAt   DateTime @default(now())
+  setup          Json
+  scannedAt      DateTime @default(now())
 
   @@unique([symbol, timeframe])
   @@index([timeframe, decision, confidence])
@@ -281,15 +281,15 @@ model MarketSnapshot {
 }
 
 model LearningRecord {
-  id           String   @id @default(cuid()) @map("_id")
-  signalId     String
-  features     Json
-  outcome      String
-  pnlPct       Float
-  analysis     Json
-  adjustments  Json
-  createdAt    DateTime @default(now())
-  signal       Signal   @relation(fields: [signalId], references: [id])
+  id          String   @id @default(cuid()) @map("_id")
+  signalId    String
+  features    Json
+  outcome     String
+  pnlPct      Float
+  analysis    Json
+  adjustments Json
+  createdAt   DateTime @default(now())
+  signal      Signal   @relation(fields: [signalId], references: [id])
 
   @@index([signalId])
   @@index([createdAt])
@@ -339,4 +339,58 @@ model SentAlert {
 
   @@index([kind, symbol, sentAt])
   @@index([sentAt])
+}
+
+/// One row per setup a scanner surfaced, and what price did afterwards.
+///
+/// The point is to answer a question the app could not previously answer about
+/// any part of itself: which scanners actually produce anything. Every scanner
+/// renders a page and some of them send alerts, but until this table existed
+/// nothing was ever written down, so no scanner had a record and none could be
+/// compared to another.
+///
+/// Deliberately *forward*-recorded rather than backtested. A backtest can be
+/// tuned until it agrees with you; a row written before the outcome exists
+/// cannot. It also measures the scanners as they really run — at the depth
+/// limit, on the sweep's schedule, with whatever staleness that implies —
+/// rather than an idealised replay.
+model ScanObservation {
+  id         String   @id @default(cuid()) @map("_id")
+  /// dedupe identity, e.g. "thrust:BTCUSDT:1h:armed:1700000000"
+  key        String   @unique
+  /// which scanner produced this row
+  scanner    String
+  /// the scanner's own bucket for it, e.g. "armed", "retest_held", "climbing"
+  state      String
+  symbol     String
+  timeframe  String
+  /// the direction the setup claims, normalised across every scanner
+  side       String
+  /// last close when the row was written
+  price      Float
+  /// the level the setup leans on, where it has one
+  level      Float?
+  /// open time of the last closed bar the scan read, unix seconds
+  barTime    Int
+  observedAt DateTime @default(now())
+  meta       Json
+
+  // --- written later by the scorer, once enough bars have closed ---
+  scoredAt      DateTime?
+  /// ATR at the observation bar, so excursions are comparable across symbols
+  atr           Float?
+  /// bars actually available when scored — fewer than the window means partial
+  barsScored    Int?
+  /// best excursion in the setup's own direction, in ATR
+  favourableAtr Float?
+  /// worst excursion against it, in ATR
+  adverseAtr    Float?
+  /// "target" | "stopped" | "neither" | "no_data"
+  outcome       String?
+
+  @@index([scanner, timeframe, observedAt])
+  @@index([scanner, outcome])
+  /// the scorer's own query: unscored rows, oldest first
+  @@index([scoredAt, barTime])
+  @@index([observedAt])
 }
