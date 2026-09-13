@@ -252,8 +252,15 @@ function Terminal() {
             hundred and sixty pixels and back again — the layout jumped under
             the reader for a change they made to one pane. A card that is
             always this tall costs the candles the pane's share only while the
-            pane is actually open, and costs the page nothing. */}
-        <div className="glass flex h-[860px] min-w-0 flex-col p-3 xl:h-[1000px]">
+            pane is actually open, and costs the page nothing.
+
+            The height itself is the one the terminal had before the pane
+            existed. Sizing the card for its tallest configuration made every
+            other configuration oversized: on a laptop the candles ran past the
+            fold and the panels beside them went with it, so reading the chart
+            and reading what the panels said about it became two separate
+            scrolls. */}
+        <div className="glass flex h-[700px] min-w-0 flex-col p-3 xl:h-[840px]">
           {/* Above the coin name: what the tape has done recently, with times. */}
           <EventTape analysis={analysis} />
           <MarketSelector connected={connected} price={price} countdown={formatted} />
