@@ -23,6 +23,11 @@ import { detectInstitutional } from "@/engines/institutional";
 import { detectRecovery } from "@/engines/recovery";
 import { BosMomentumSetup, BosState, detectBosMomentum } from "@/engines/bosMomentum";
 import { FlowAlignmentRead, FlowState, readFlowAlignment } from "@/engines/flowAlignment";
+import {
+  CandleLadder,
+  MIN_BARS as LADDER_MIN_BARS,
+  strongestLadder,
+} from "@/engines/candleLadder";
 import { analyzeMarket } from "@/engines/analyzer";
 import { evaluateStrategies } from "@/engines/strategies";
 import { getStrategyWeights } from "./signalService";
@@ -1550,6 +1555,123 @@ export async function scanFlowAlignment(opts: {
     absorbedSelloffs: inState("absorbed_selloff", 15),
     scanned: entries.length,
     noRead: entries.filter((e) => e.read.state === null).length,
+    failed_count: failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Staircase runs
+ * ------------------------------------------------------------------ */
+
+export interface CandleLadderEntry {
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  /** open time of the last closed bar this read was built from, unix seconds */
+  barTime: number;
+  /** last close, so the page can say how far price sits above or below the line */
+  price: number;
+  ladder: CandleLadder;
+}
+
+/**
+ * Split by direction and by whether the run is still going.
+ *
+ * A finished run is not a weaker version of a live one, it is a different
+ * thing: the staircase is the subject, and one that stopped three bars ago is
+ * a description of the past. Ranking them together would put a beautiful dead
+ * run above the modest live one somebody could actually act on, which is the
+ * same mistake the flow sweep separates its buckets to avoid.
+ */
+export interface CandleLadderScan {
+  timeframe: string;
+  /** ascending staircases still stepping on the last closed bar */
+  climbing: CandleLadderEntry[];
+  /** descending staircases still stepping */
+  falling: CandleLadderEntry[];
+  /** runs that have stopped stepping but whose line is not yet closed through */
+  stalled: CandleLadderEntry[];
+  /** runs a later bar has closed through — the line gave way */
+  broken: CandleLadderEntry[];
+  scanned: number;
+  /** symbols with no run at all this sweep — most of the universe, most of the time */
+  noRun: number;
+  failed_count: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for symbols whose recent candles are walking a straight line.
+ *
+ * One request per symbol, so this runs at the full default depth — unlike the
+ * flow sweep, there is no second series to fetch. The shared `SCAN_BARS` key
+ * means a symbol already pulled by another sweep this minute is served from
+ * cache rather than costing a call at all.
+ *
+ * `minBars` is exposed because the right answer depends on the timeframe in a
+ * way the engine cannot know: four consecutive higher lows on 1m is most of
+ * the universe most of the time, and on 1d it is a rare and large event.
+ */
+export async function scanCandleLadder(opts: {
+  timeframe: Timeframe;
+  minBars?: number;
+  depth?: number;
+  concurrency?: number;
+}): Promise<CandleLadderScan> {
+  const minBars = Math.max(LADDER_MIN_BARS, Math.min(50, opts.minBars ?? LADDER_MIN_BARS));
+  const ranked = takeDepth(await rankUniverse(), opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? 12, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    return {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      barTime: candles[candles.length - 1]?.time ?? 0,
+      price: candles[candles.length - 1]?.close ?? 0,
+      ladder: strongestLadder(candles),
+    };
+  });
+
+  const entries: CandleLadderEntry[] = [];
+  let failed = 0;
+  let noRun = 0;
+  for (const res of results) {
+    // undefined = the deadline hit before this symbol was reached. Not a
+    // failure — counting it as one would report a healthy sweep as broken.
+    if (!res) continue;
+    if (res.status !== "fulfilled") {
+      failed++;
+      continue;
+    }
+    const { ladder, ...rest } = res.value;
+    if (!ladder || ladder.bars < minBars) {
+      noRun++;
+      continue;
+    }
+    entries.push({ ...rest, ladder });
+  }
+
+  const byScore = (a: CandleLadderEntry, b: CandleLadderEntry) => b.ladder.score - a.ladder.score;
+  /* Live means the run's last bar *is* the last closed bar. One bar of grace
+     and a run that has already stopped shows up under "climbing", which is the
+     one claim on this page a reader would act on without checking. */
+  const live = (e: CandleLadderEntry) => e.ladder.barsSinceEnd === 0 && !e.ladder.broken;
+
+  return {
+    timeframe: opts.timeframe,
+    climbing: entries.filter((e) => live(e) && e.ladder.direction === "up").sort(byScore).slice(0, 40),
+    falling: entries.filter((e) => live(e) && e.ladder.direction === "down").sort(byScore).slice(0, 40),
+    stalled: entries.filter((e) => !live(e) && !e.ladder.broken).sort(byScore).slice(0, 20),
+    broken: entries.filter((e) => e.ladder.broken).sort(byScore).slice(0, 20),
+    scanned: entries.length + noRun,
+    noRun,
     failed_count: failed,
     scannedAt: Math.floor(Date.now() / 1000),
   };
