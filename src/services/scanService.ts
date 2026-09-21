@@ -23,6 +23,12 @@ import { detectInstitutional } from "@/engines/institutional";
 import { detectRecovery } from "@/engines/recovery";
 import { BosMomentumSetup, BosState, detectBosMomentum } from "@/engines/bosMomentum";
 import { FlowAlignmentRead, FlowState, readFlowAlignment } from "@/engines/flowAlignment";
+import { findCvdDivergences } from "@/engines/cvdDivergence";
+import {
+  findRsiDivergences,
+  isRegular as isRegularRsi,
+  sideOf as rsiSideOf,
+} from "@/engines/rsiDivergence";
 import {
   CandleLadder,
   MIN_BARS as LADDER_MIN_BARS,
@@ -1801,6 +1807,181 @@ export async function scanRetestThrust(opts: {
     failed: inState("failed", 15),
     scanned: entries.length + noSetup,
     noSetup,
+    failed_count: failed,
+    scannedAt: Math.floor(Date.now() / 1000),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Divergence finder — RSI and CVD in one sweep
+ * ------------------------------------------------------------------ */
+
+export type DivergenceSource = "rsi" | "cvd";
+
+export interface DivergenceEntry {
+  source: DivergenceSource;
+  symbol: string;
+  label: string;
+  timeframe: string;
+  quoteVolume: number;
+  priceChangePercent: number | null;
+  /** open time of the last closed bar the scan read, unix seconds */
+  barTime: number;
+  price: number;
+  /**
+   * Open time of the divergence's *later* pivot, unix seconds.
+   *
+   * This — not the sweep's clock and not the last bar — is what "most recent"
+   * means on this page. A divergence that completed thirty bars ago is thirty
+   * bars old however recently the scan happened to notice it, and sorting by
+   * anything else would put stale readings at the top of a list whose whole
+   * ordering claim is recency.
+   */
+  at: number;
+  kind: string;
+  /** what a reader would take if they acted on it */
+  side: "long" | "short";
+  /** reversal reading rather than continuation */
+  regular: boolean;
+  /** price change between the two pivots, percent */
+  pricePct: number;
+  /** the indicator's own disagreement, in its own units */
+  indicatorDelta: number;
+  /** units `indicatorDelta` is expressed in, for the column header */
+  indicatorUnit: string;
+  barsApart: number;
+  strength: number;
+  kindLabel: string;
+  note: string;
+}
+
+export interface DivergenceScan {
+  timeframe: string;
+  /** every row, both sources, newest pivot first */
+  rows: DivergenceEntry[];
+  scanned: number;
+  /** symbols where neither indicator disagreed with price */
+  noDivergence: number;
+  failed_count: number;
+  scannedAt: number;
+  error?: string;
+}
+
+/**
+ * Sweep for price/indicator divergence, on both RSI and cumulative delta.
+ *
+ * One klines call per symbol serves both: RSI comes from the closes and CVD is
+ * accumulated from the taker-buy split already on every candle, so running the
+ * two together costs exactly what running either alone would.
+ *
+ * Returned as one list rather than two, newest pivot first, because the page
+ * shows them together and a reader scanning for "what just happened" does not
+ * care which indicator noticed. `source` is on every row for filtering.
+ */
+export async function scanDivergences(opts: {
+  timeframe: Timeframe;
+  sources?: DivergenceSource[];
+  depth?: number;
+  concurrency?: number;
+}): Promise<DivergenceScan> {
+  const sources = opts.sources?.length ? opts.sources : (["rsi", "cvd"] as DivergenceSource[]);
+  const ranked = takeDepth(await rankUniverse(), opts.depth ?? DEFAULT_SCAN_DEPTH);
+
+  const results = await mapLimit(ranked, opts.concurrency ?? 12, async (r) => {
+    const candles = await fetchKlines(r.symbol, opts.timeframe, SCAN_BARS);
+    const last = candles[candles.length - 1];
+    const common = {
+      symbol: r.symbol,
+      label: r.label,
+      timeframe: opts.timeframe,
+      quoteVolume: r.quoteVolume,
+      priceChangePercent: r.priceChangePercent,
+      barTime: last?.time ?? 0,
+      price: last?.close ?? 0,
+    };
+    const rows: DivergenceEntry[] = [];
+
+    if (sources.includes("rsi")) {
+      for (const d of findRsiDivergences(candles)) {
+        rows.push({
+          ...common,
+          source: "rsi",
+          at: d.to.time,
+          kind: d.kind,
+          side: rsiSideOf(d.kind),
+          regular: isRegularRsi(d.kind),
+          pricePct: d.pricePct,
+          indicatorDelta: d.rsiDelta,
+          indicatorUnit: "RSI pts",
+          barsApart: d.barsApart,
+          strength: d.strength,
+          kindLabel: d.label,
+          note: d.note,
+        });
+      }
+    }
+
+    if (sources.includes("cvd")) {
+      /* The same running total the chart draws: taker buys minus the rest,
+         accumulated. Built here from the candles rather than by running a full
+         analysis pass, which would cost a second engine run per symbol for a
+         series that is four lines of arithmetic. */
+      let cvd = 0;
+      const series = candles.map((c) => {
+        const buy = c.takerBuyVolume ?? c.volume / 2;
+        cvd += buy - (c.volume - buy);
+        return { time: c.time, cvd };
+      });
+      for (const d of findCvdDivergences(candles, series)) {
+        rows.push({
+          ...common,
+          source: "cvd",
+          at: d.to.time,
+          kind: d.kind,
+          side: d.kind === "bullish" ? "long" : "short",
+          // The CVD engine reports only the reversal reading.
+          regular: true,
+          pricePct: d.pricePct,
+          indicatorDelta: d.cvdShare * 100,
+          indicatorUnit: "% of CVD range",
+          barsApart: d.barsApart,
+          strength: d.strength,
+          kindLabel: d.label,
+          note: d.note,
+        });
+      }
+    }
+
+    return rows;
+  });
+
+  const rows: DivergenceEntry[] = [];
+  let failed = 0;
+  let noDivergence = 0;
+  let scanned = 0;
+  for (const res of results) {
+    // undefined = the deadline hit before this symbol was reached. Not a
+    // failure — counting it as one would report a healthy sweep as broken.
+    if (!res) continue;
+    if (res.status !== "fulfilled") {
+      failed++;
+      continue;
+    }
+    scanned++;
+    if (res.value.length === 0) noDivergence++;
+    rows.push(...res.value);
+  }
+
+  /* Newest pivot first. Strength breaks ties rather than deciding the order:
+     the page's claim is "what happened most recently", and sorting by score
+     would quietly turn it into "what scored best", which is a different page. */
+  rows.sort((a, b) => b.at - a.at || b.strength - a.strength);
+
+  return {
+    timeframe: opts.timeframe,
+    rows: rows.slice(0, 120),
+    scanned,
+    noDivergence,
     failed_count: failed,
     scannedAt: Math.floor(Date.now() / 1000),
   };
