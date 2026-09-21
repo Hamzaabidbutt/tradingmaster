@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Bias } from "@/engines/types";
 
 export function GlassCard({
@@ -111,6 +111,27 @@ export function Gauge({ value, label, tone }: { value: number; label: string; to
       <span className="text-xs text-slate-400">{label}</span>
     </div>
   );
+}
+
+/**
+ * The reader's timezone, rendered only once the browser has it.
+ *
+ * `localZone()` called straight into JSX is a hydration bug waiting to happen:
+ * on the server it resolves to the *server's* zone and on the client to the
+ * reader's, so any zone printed in server-rendered prose mismatches on arrival.
+ * React then discards the server tree and re-renders the whole root on the
+ * client — a real cost, and one whose only visible symptom is a console
+ * warning nobody reads.
+ *
+ * Rendering after mount sidesteps it: the fallback ships in the HTML, the real
+ * zone replaces it on the client, and the two were never expected to agree.
+ * Time *values* do not need this — they only ever appear inside data fetched
+ * in the browser, so they are not in the server tree at all.
+ */
+export function LocalZone({ fallback = "your local time" }: { fallback?: string }) {
+  const [zone, setZone] = useState<string | null>(null);
+  useEffect(() => setZone(localZone()), []);
+  return <>{zone ?? fallback}</>;
 }
 
 export function timeAgo(unixSec: number): string {

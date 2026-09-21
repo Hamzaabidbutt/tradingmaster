@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import {
   scanBosMomentum,
   scanCandleLadder,
+  scanDivergences,
   scanComposite,
   scanEngulfing,
   scanFlowAlignment,
@@ -354,6 +355,40 @@ const SCANNERS: ScannerSpec[] = [
           } satisfies Observation,
         ];
       });
+    },
+  },
+  {
+    name: "divergence",
+    cheap: true,
+    async run({ timeframe, depth }) {
+      const s = await scanDivergences({ timeframe, depth });
+      /* Only the reversal reading is recorded. Hidden divergence is a
+         continuation claim about a trend already in motion, so scoring it
+         against the same target/stop rule would be judging it on a question it
+         never asked. Its rows stay on the page and out of the ledger. */
+      return s.rows
+        .filter((r) => r.regular)
+        .map((r) => ({
+          scanner: "divergence",
+          state: `${r.source}_${r.kind}`,
+          symbol: r.symbol,
+          timeframe: r.timeframe,
+          side: r.side,
+          price: r.price,
+          level: null,
+          /* Keyed on the bar the scan read, like every other scanner, so a
+             divergence that stays on the page for twenty bars is one row. The
+             pivot time goes in meta, where it describes the event without
+             making a second row every time the sweep runs. */
+          barTime: r.barTime,
+          meta: {
+            source: r.source,
+            kind: r.kind,
+            strength: r.strength,
+            pricePct: r.pricePct,
+            completedAt: r.at,
+          },
+        }));
     },
   },
   {
