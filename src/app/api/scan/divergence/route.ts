@@ -15,7 +15,10 @@ export const maxDuration = 60;
  * That is a property of the pattern rather than of this route, and the page
  * says so.
  *
- * `?source=rsi` or `?source=cvd` runs one indicator instead of both.
+ * `?source=rsi` or `?source=cvd` runs one indicator instead of both, which is
+ * what the two scanner pages use. `?period=` overrides the RSI lookback; 14 is
+ * Wilder's default and the one every charting package draws, so changing it
+ * means the numbers here stop matching the reader's own chart.
  */
 function sourcesFrom(raw: string | null): DivergenceSource[] | undefined {
   if (!raw) return undefined;
@@ -34,9 +37,17 @@ export async function GET(req: NextRequest) {
   const depthRaw = Number(q.get("depth") ?? DEFAULT_SCAN_DEPTH);
   const depth = Number.isFinite(depthRaw) ? Math.max(0, depthRaw) : DEFAULT_SCAN_DEPTH;
 
+  const periodRaw = Number(q.get("period"));
+  const rsiPeriod = Number.isFinite(periodRaw) && periodRaw >= 2 ? periodRaw : undefined;
+
   try {
     return NextResponse.json(
-      await scanDivergences({ timeframe, depth, sources: sourcesFrom(q.get("source")) })
+      await scanDivergences({
+        timeframe,
+        depth,
+        rsiPeriod,
+        sources: sourcesFrom(q.get("source")),
+      })
     );
   } catch (err) {
     /* 200 with an error field, like the other sweeps: a failed scan is a state
@@ -44,6 +55,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         timeframe,
+        rsiPeriod: rsiPeriod ?? 14,
         rows: [],
         scanned: 0,
         noDivergence: 0,

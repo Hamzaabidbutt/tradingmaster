@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import {
   scanBosMomentum,
   scanCandleLadder,
+  DivergenceScan,
   scanDivergences,
   scanComposite,
   scanEngulfing,
@@ -141,6 +142,39 @@ interface ScannerSpec {
  * direction, and recording it with the others would enter every one of its
  * rows backwards.
  */
+/**
+ * Divergence rows, shaped for the ledger.
+ *
+ * Only the reversal reading is recorded. Hidden divergence is a continuation
+ * claim about a trend already in motion, so scoring it against the same
+ * target/stop rule would be judging it on a question it never asked. Its rows
+ * stay on the page and out of the ledger.
+ */
+function divergenceRows(scan: DivergenceScan, scanner: string): Observation[] {
+  return scan.rows
+    .filter((r) => r.regular)
+    .map((r) => ({
+      scanner,
+      state: r.kind,
+      symbol: r.symbol,
+      timeframe: r.timeframe,
+      side: r.side,
+      price: r.price,
+      level: null,
+      /* Keyed on the bar the scan read, like every other scanner, so a
+         divergence that stays on the page for twenty bars is one row. The
+         pivot time goes in meta, where it describes the event without making a
+         second row every time the sweep runs. */
+      barTime: r.barTime,
+      meta: {
+        kind: r.kind,
+        strength: r.strength,
+        pricePct: r.pricePct,
+        completedAt: r.at,
+      },
+    }));
+}
+
 const SCANNERS: ScannerSpec[] = [
   {
     name: "thrust",
@@ -358,37 +392,22 @@ const SCANNERS: ScannerSpec[] = [
     },
   },
   {
-    name: "divergence",
+    /* Two entries rather than one, matching the two scanner pages. The state
+       column would already have separated them — it carries the source — but a
+       scorecard whose rows do not line up with the navigation makes the reader
+       do the mapping, and the whole point of the scorecard is to be read at a
+       glance. */
+    name: "rsi_div",
     cheap: true,
     async run({ timeframe, depth }) {
-      const s = await scanDivergences({ timeframe, depth });
-      /* Only the reversal reading is recorded. Hidden divergence is a
-         continuation claim about a trend already in motion, so scoring it
-         against the same target/stop rule would be judging it on a question it
-         never asked. Its rows stay on the page and out of the ledger. */
-      return s.rows
-        .filter((r) => r.regular)
-        .map((r) => ({
-          scanner: "divergence",
-          state: `${r.source}_${r.kind}`,
-          symbol: r.symbol,
-          timeframe: r.timeframe,
-          side: r.side,
-          price: r.price,
-          level: null,
-          /* Keyed on the bar the scan read, like every other scanner, so a
-             divergence that stays on the page for twenty bars is one row. The
-             pivot time goes in meta, where it describes the event without
-             making a second row every time the sweep runs. */
-          barTime: r.barTime,
-          meta: {
-            source: r.source,
-            kind: r.kind,
-            strength: r.strength,
-            pricePct: r.pricePct,
-            completedAt: r.at,
-          },
-        }));
+      return divergenceRows(await scanDivergences({ timeframe, depth, sources: ["rsi"] }), "rsi_div");
+    },
+  },
+  {
+    name: "cvd_div",
+    cheap: true,
+    async run({ timeframe, depth }) {
+      return divergenceRows(await scanDivergences({ timeframe, depth, sources: ["cvd"] }), "cvd_div");
     },
   },
   {
