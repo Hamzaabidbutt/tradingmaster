@@ -27,6 +27,7 @@ import { findStrongCandles } from "@/engines/strongCandles";
 import { findAggressiveCandles, strongestPerRun } from "@/engines/aggressiveCandles";
 import { findSqueezeCandles, strongestSqueezePerRun } from "@/engines/squeezeCandles";
 import { findCvdDivergences } from "@/engines/cvdDivergence";
+import { computeRsi, findRsiDivergences } from "@/engines/rsiDivergence";
 import CandleInspector from "./CandleInspector";
 import BuyingChecklistCard from "./BuyingChecklistCard";
 import { nextHoveredTime, shouldReleaseHover } from "./hoverState";
@@ -1097,6 +1098,25 @@ export default function TradingChart({
         : [],
     [overlays.cvdDivergence, candles, analysis]
   );
+
+  /* The same readings the RSI divergence scanner reports, recomputed here from
+     the chart's own candles. Recomputed rather than fetched: the scanner and
+     the chart then cannot disagree about what a symbol is doing, which is the
+     one thing that makes a scanner row worth clicking through to. */
+  const rsiDivergences = useMemo(
+    () => (overlays.rsiDivergence ? findRsiDivergences(candles) : []),
+    [overlays.rsiDivergence, candles]
+  );
+  const rsiByTime = useMemo(() => {
+    if (!overlays.rsiDivergence) return null;
+    const values = computeRsi(candles);
+    const map = new Map<number, number>();
+    candles.forEach((c, i) => {
+      const v = values[i];
+      if (v != null) map.set(c.time, v);
+    });
+    return map;
+  }, [overlays.rsiDivergence, candles]);
 
   // --- Markers: structure, sweeps, patterns, order-flow events ---
   const markers = useMemo<RankedMarker[]>(() => {
@@ -2370,13 +2390,15 @@ export default function TradingChart({
               ctx.fillStyle = colour;
               ctx.fill();
             }
-            ctx.fillStyle = colour;
-            ctx.font = "9px ui-monospace, monospace";
-            ctx.textAlign = "left";
-            ctx.fillText(
-              `${d.label} ${d.strength}`,
-              Math.min(Number(x2) + 6, rightEdge - 92),
-              Number(py2) + (bear ? -6 : 12)
+            drawDivergenceBadge(
+              ctx,
+              bear ? "Bear" : "Bull",
+              false,
+              colour,
+              Number(x2),
+              Number(py2),
+              !bear,
+              rightEdge
             );
           }
 
@@ -2402,6 +2424,118 @@ export default function TradingChart({
           ctx.font = "8px ui-monospace, monospace";
           ctx.textAlign = "right";
           ctx.fillText(compact(d.to.cvd), Math.min(Number(x2) - 4, rightEdge - 4), cvdY(d.to.cvd) - 4);
+          ctx.textAlign = "left";
+        }
+      }
+
+      /* ---------------- RSI divergence ----------------
+            Drawn the same way the CVD divergence is: the price leg through the
+            actual pivots, and the indicator leg on its own strip below. Two
+            lines rather than a label, because the claim is about *slope* — a
+            marginal divergence and a screaming one are identical labelled and
+            obviously different drawn.
+
+            This exists because the RSI scanner was reporting setups that were
+            nowhere to be seen on the chart it linked to. A scanner row you
+            cannot check against the chart is a row you have to take on trust,
+            which is the opposite of what a chart is for. */
+      if (overlays.rsiDivergence && rsiDivergences.length > 0 && rsiByTime) {
+        const bandH = 34;
+        const bandTop = h - (ts.height?.() ?? 28) - 10 - bandH;
+        /* Fixed 0-100, not scaled to what happens to be on screen. RSI's whole
+           meaning is where a reading sits on its own fixed scale, and a
+           self-scaling strip would make 55 look like an extreme on a quiet
+           stretch. */
+        const rsiY = (v: number) => bandTop + bandH - (Math.max(0, Math.min(100, v)) / 100) * bandH;
+
+        ctx.fillStyle = "rgba(6,9,16,0.55)";
+        ctx.fillRect(0, bandTop - 2, rightEdge, bandH + 4);
+        // 70 and 30, the levels every reader already has in mind.
+        ctx.strokeStyle = "rgba(139,147,167,0.25)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        for (const level of [70, 30]) {
+          ctx.beginPath();
+          ctx.moveTo(0, rsiY(level));
+          ctx.lineTo(rightEdge, rsiY(level));
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(139,147,167,0.7)";
+        ctx.font = "8px ui-monospace, monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("RSI 14", 4, bandTop + 8);
+
+        for (const d of rsiDivergences) {
+          const x1 = xOf(d.from.time);
+          const x2 = xOf(d.to.time);
+          if (x1 == null || x2 == null) continue;
+          const bull = d.kind === "regular_bullish" || d.kind === "hidden_bullish";
+          const colour = bull ? "rgba(0,229,160,0.95)" : "rgba(255,77,109,0.95)";
+          const hidden = d.kind.startsWith("hidden");
+
+          // The price leg, through the actual pivots.
+          const py1 = yOf(d.from.price);
+          const py2 = yOf(d.to.price);
+          if (py1 != null && py2 != null) {
+            ctx.strokeStyle = colour;
+            ctx.lineWidth = 1.75;
+            /* Hidden divergence dashed, because it means the opposite of the
+               solid ones. Two claims that point in opposite directions must
+               not be drawn identically. */
+            ctx.setLineDash(hidden ? [5, 3] : []);
+            ctx.beginPath();
+            ctx.moveTo(Number(x1), Number(py1));
+            ctx.lineTo(Number(x2), Number(py2));
+            ctx.stroke();
+            ctx.setLineDash([]);
+            for (const [px, py] of [
+              [x1, py1],
+              [x2, py2],
+            ] as const) {
+              ctx.beginPath();
+              ctx.arc(Number(px), Number(py), 3, 0, Math.PI * 2);
+              ctx.fillStyle = colour;
+              ctx.fill();
+            }
+            drawDivergenceBadge(
+              ctx,
+              bull ? "Bull" : "Bear",
+              hidden,
+              colour,
+              Number(x2),
+              Number(py2),
+              bull,
+              rightEdge
+            );
+          }
+
+          // The RSI leg, on its own strip and its own fixed scale.
+          ctx.strokeStyle = colour;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([3, 3]);
+          ctx.beginPath();
+          ctx.moveTo(Number(x1), rsiY(d.from.rsi));
+          ctx.lineTo(Number(x2), rsiY(d.to.rsi));
+          ctx.stroke();
+          ctx.setLineDash([]);
+          for (const [px, v] of [
+            [x1, d.from.rsi],
+            [x2, d.to.rsi],
+          ] as const) {
+            ctx.beginPath();
+            ctx.arc(Number(px), rsiY(v), 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = colour;
+            ctx.fill();
+          }
+          ctx.fillStyle = "rgba(203,213,225,0.85)";
+          ctx.font = "8px ui-monospace, monospace";
+          ctx.textAlign = "right";
+          ctx.fillText(
+            d.to.rsi.toFixed(0),
+            Math.min(Number(x2) - 4, rightEdge - 4),
+            rsiY(d.to.rsi) - 4
+          );
           ctx.textAlign = "left";
         }
       }
@@ -2705,3 +2839,62 @@ function compact(v: number): string {
   if (abs === 0) return "0";
   return `${sign}${abs.toFixed(2)}`;
 }
+
+/**
+ * The Bull / Bear badge at the end of a divergence line.
+ *
+ * A filled pill rather than bare text. Bare text on a candle chart competes
+ * with everything behind it — wicks, grid lines, other overlays — and at the
+ * small sizes this draws at, a red word on a red candle is genuinely hard to
+ * find. The pill gives the label its own ground and makes the line it belongs
+ * to unambiguous.
+ *
+ * Hidden divergence gets an outlined pill instead of a filled one, because it
+ * is read the opposite way to a regular one and the two must not look alike at
+ * a glance.
+ */
+function drawDivergenceBadge(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  hidden: boolean,
+  colour: string,
+  x: number,
+  y: number,
+  below: boolean,
+  rightEdge: number
+): void {
+  ctx.font = "bold 9px ui-monospace, monospace";
+  const padX = 5;
+  const w = ctx.measureText(text).width + padX * 2;
+  const bh = 14;
+  // Kept clear of the price axis, where it would be half-hidden by the labels.
+  const bx = Math.min(x + 6, rightEdge - w - 2);
+  const by = below ? y + 6 : y - 6 - bh;
+
+  ctx.beginPath();
+  const r = 3;
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + w, by, bx + w, by + bh, r);
+  ctx.arcTo(bx + w, by + bh, bx, by + bh, r);
+  ctx.arcTo(bx, by + bh, bx, by, r);
+  ctx.arcTo(bx, by, bx + w, by, r);
+  ctx.closePath();
+
+  if (hidden) {
+    ctx.fillStyle = "rgba(9,12,20,0.85)";
+    ctx.fill();
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = colour;
+  } else {
+    ctx.fillStyle = colour;
+    ctx.fill();
+    ctx.fillStyle = "rgba(9,12,20,0.95)";
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, bx + padX, by + bh / 2 + 0.5);
+  ctx.textBaseline = "alphabetic";
+}
+

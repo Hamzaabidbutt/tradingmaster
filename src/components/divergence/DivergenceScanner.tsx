@@ -218,7 +218,16 @@ export default function DivergenceScanner({
                     row={r}
                     open={expanded === id}
                     onToggle={() => setExpanded(expanded === id ? null : id)}
-                    onOpenTerminal={() => openTerminal(r.symbol, r.timeframe)}
+                    /* Opens with this scanner's own overlay switched on, so
+                       the row's claim is actually drawn on the chart it links
+                       to rather than left for the reader to find. */
+                    onOpenTerminal={() =>
+                      openTerminal(
+                        r.symbol,
+                        r.timeframe,
+                        source === "rsi" ? "rsiDivergence" : "cvdDivergence"
+                      )
+                    }
                   />
                 );
               })

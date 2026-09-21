@@ -66,6 +66,7 @@ export interface OverlayToggles {
   squeezeCandles: boolean;
   /** price/CVD divergences drawn as two opposing trendlines */
   cvdDivergence: boolean;
+  rsiDivergence: boolean;
   /** bar extremes where both sides were still trading — business left undone */
   unfinishedAuctions: boolean;
   /** cumulative delta drawn as candles rather than as a line */
@@ -177,6 +178,7 @@ export const useMarketStore = create<MarketState>()(
         deltaProfile: false,
         squeezeCandles: false,
         cvdDivergence: false,
+        rsiDivergence: false,
         unfinishedAuctions: false,
         cvdCandles: false,
         clusterNumbers: false,

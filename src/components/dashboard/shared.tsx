@@ -142,9 +142,14 @@ export function opponentsOf(verdicts: AnalystVerdict[], side: "BUY" | "SELL"): A
  * works because of a side effect cannot be copied, bookmarked or sent to
  * anyone. The same URL is what the alert messages link to.
  */
-export function terminalHref(symbol: string, timeframe?: string): string {
+export function terminalHref(symbol: string, timeframe?: string, overlay?: string): string {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
   if (timeframe && isValidTimeframe(timeframe)) params.set("timeframe", timeframe);
+  /* The overlay that shows whatever the scanner just claimed.
+     Without this, clicking through from a divergence row lands on a chart with
+     the divergence overlay switched off — the reading is simply not drawn, and
+     the honest conclusion a reader draws is that the scanner made it up. */
+  if (overlay) params.set("overlay", overlay);
   return `/terminal?${params.toString()}`;
 }
 
@@ -158,8 +163,8 @@ export function terminalHref(symbol: string, timeframe?: string): string {
  * `noopener` because the new tab has no business reaching back into this one.
  */
 export function useOpenInTerminal() {
-  return useCallback((symbol: string, timeframe?: string) => {
-    window.open(terminalHref(symbol, timeframe), "_blank", "noopener,noreferrer");
+  return useCallback((symbol: string, timeframe?: string, overlay?: string) => {
+    window.open(terminalHref(symbol, timeframe, overlay), "_blank", "noopener,noreferrer");
   }, []);
 }
 
