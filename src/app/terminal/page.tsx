@@ -84,6 +84,7 @@ function Terminal() {
     pulseWindowMinutes,
     setSymbol,
     setTimeframe,
+    setOverlays,
     inspectorPos,
     setInspectorPos,
     inspectorMinimized,
@@ -104,7 +105,21 @@ function Terminal() {
     if (wanted && SYMBOL_RE.test(wanted)) setSymbol(wanted);
     const tf = searchParams.get("timeframe");
     if (tf && isValidTimeframe(tf)) setTimeframe(tf);
-  }, [searchParams, setSymbol, setTimeframe]);
+    /* `?overlay=` turns on the layer that draws whatever sent you here.
+       A scanner row is a claim about a chart, and arriving at that chart with
+       the layer switched off means the claim is simply not drawn — which reads
+       as the scanner having invented it. Only ever switches one *on*: silently
+       turning a reader's other layers off because of a link would be worse
+       than the problem it solves. */
+    const overlay = searchParams.get("overlay");
+    /* Read from the store rather than from the `overlays` prop, and left out of
+       the dependencies on purpose. Depending on the live object would re-run
+       this effect on every toggle — so switching the layer back off would
+       immediately switch it on again, and the control would appear broken. */
+    if (overlay && overlay in useMarketStore.getState().overlays) {
+      setOverlays({ [overlay]: true });
+    }
+  }, [searchParams, setSymbol, setTimeframe, setOverlays]);
   const { precisionFor } = useSymbols();
   const pricePrecision = precisionFor(symbol);
   const { analysis } = useAnalysis(symbol, timeframe, 8000, pulseWindowMinutes);

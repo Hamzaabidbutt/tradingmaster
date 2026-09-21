@@ -100,6 +100,12 @@ const OVERLAY_GROUPS: { group: string; items: { key: keyof OverlayToggles; label
           "Cumulative delta as candles, in a pane below the chart with its own price scale — so the highs and lows are legible, and the axis can be dragged to rescale. Scroll and zoom stay in step with price in both directions. The body is the bar's net delta; the wicks are how far the delta travelled inside the bar, and a long wick on a small body is aggression pressing and being handed back, which a line draws as a gentle rise. Wicks need the intrabar reconstruction: bars without one are drawn wickless, meaning the path is unknown rather than straight.",
       },
       {
+        key: "rsiDivergence",
+        label: "RSI DIV",
+        title:
+          "Price and RSI(14) pulling opposite ways, drawn as two lines — the price leg through the pivots and the RSI leg on its own strip below, so the two slopes can be compared rather than taken on trust. Regular divergence is the reversal reading; hidden divergence is the same machinery read as continuation and is labelled separately, because merging them would put opposite claims under one name. Not a reversal signal: markets make higher highs on falling RSI for weeks.",
+      },
+      {
         key: "cvdDivergence",
         label: "CVD DIV",
         title:
