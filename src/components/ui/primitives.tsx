@@ -159,6 +159,27 @@ export function localTime(unixSec: number): string {
   });
 }
 
+/**
+ * Time of day, with the date prefixed once the reading is not from today.
+ *
+ * A list ordered by recency has to *look* ordered. Showing time of day alone,
+ * a row from 2pm yesterday sits below one from 1am today and reads as though
+ * the sort is broken — the sequence is right and the display is what lies.
+ * Anything older than today therefore carries its date, and today's rows stay
+ * uncluttered.
+ */
+export function localTimeOrDate(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
+
 /** Local date and time, for anything that may not be from today. */
 export function localStamp(unixSec: number): string {
   const d = new Date(unixSec * 1000);

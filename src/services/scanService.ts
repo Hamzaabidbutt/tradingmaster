@@ -25,6 +25,7 @@ import { BosMomentumSetup, BosState, detectBosMomentum } from "@/engines/bosMome
 import { FlowAlignmentRead, FlowState, readFlowAlignment } from "@/engines/flowAlignment";
 import { findCvdDivergences } from "@/engines/cvdDivergence";
 import {
+  RSI_PERIOD,
   findRsiDivergences,
   isRegular as isRegularRsi,
   sideOf as rsiSideOf,
@@ -1857,6 +1858,8 @@ export interface DivergenceEntry {
 
 export interface DivergenceScan {
   timeframe: string;
+  /** the RSI lookback this sweep actually used */
+  rsiPeriod: number;
   /** every row, both sources, newest pivot first */
   rows: DivergenceEntry[];
   scanned: number;
@@ -1881,10 +1884,13 @@ export interface DivergenceScan {
 export async function scanDivergences(opts: {
   timeframe: Timeframe;
   sources?: DivergenceSource[];
+  /** RSI lookback; 14 is Wilder's default and what every chart draws */
+  rsiPeriod?: number;
   depth?: number;
   concurrency?: number;
 }): Promise<DivergenceScan> {
   const sources = opts.sources?.length ? opts.sources : (["rsi", "cvd"] as DivergenceSource[]);
+  const rsiPeriod = Math.max(2, Math.min(50, Math.round(opts.rsiPeriod ?? RSI_PERIOD)));
   const ranked = takeDepth(await rankUniverse(), opts.depth ?? DEFAULT_SCAN_DEPTH);
 
   const results = await mapLimit(ranked, opts.concurrency ?? 12, async (r) => {
@@ -1902,7 +1908,7 @@ export async function scanDivergences(opts: {
     const rows: DivergenceEntry[] = [];
 
     if (sources.includes("rsi")) {
-      for (const d of findRsiDivergences(candles)) {
+      for (const d of findRsiDivergences(candles, rsiPeriod)) {
         rows.push({
           ...common,
           source: "rsi",
@@ -1912,7 +1918,7 @@ export async function scanDivergences(opts: {
           regular: isRegularRsi(d.kind),
           pricePct: d.pricePct,
           indicatorDelta: d.rsiDelta,
-          indicatorUnit: "RSI pts",
+          indicatorUnit: `RSI(${rsiPeriod}) pts`,
           barsApart: d.barsApart,
           strength: d.strength,
           kindLabel: d.label,
@@ -1979,6 +1985,7 @@ export async function scanDivergences(opts: {
 
   return {
     timeframe: opts.timeframe,
+    rsiPeriod,
     rows: rows.slice(0, 120),
     scanned,
     noDivergence,
